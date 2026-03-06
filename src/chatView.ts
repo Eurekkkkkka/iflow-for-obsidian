@@ -118,8 +118,21 @@ export class IFlowChatView extends ItemView {
 			this.app.workspace.on('active-leaf-change', () => this.updateContext())
 		);
 
-		// Add welcome message
-		this.addWelcomeMessage();
+		// Initialize conversation - load existing or create new
+		this.initializeConversation();
+	}
+
+	private initializeConversation(): void {
+		const state = this.conversationStore.getState();
+		this.currentConversationId = state.currentConversationId;
+
+		if (this.currentConversationId) {
+			// Load existing conversation
+			this.loadMessagesFromConversation();
+		} else {
+			// Create first conversation
+			this.createNewConversation();
+		}
 	}
 
 	async onClose() {
@@ -598,6 +611,13 @@ export class IFlowChatView extends ItemView {
 		this.messages = [];
 		this.messagesContainer.empty();
 
+		// Reset streaming state
+		this.isStreaming = false;
+		this.currentMessage = '';
+
+		// Show welcome message
+		this.addWelcomeMessage();
+
 		// Update title
 		if (this.conversationTitleEl) {
 			this.conversationTitleEl.textContent = conversation.title;
@@ -629,16 +649,26 @@ export class IFlowChatView extends ItemView {
 	private loadMessagesFromConversation(): void {
 		this.messagesContainer.empty();
 
+		// Reset streaming state
+		this.isStreaming = false;
+		this.currentMessage = '';
+
 		const current = this.conversationStore.getCurrentConversation();
 		if (!current) {
 			// Show welcome message if no conversation
 			this.addWelcomeMessage();
+			this.messages = [];
 			return;
 		}
+
+		// Clear and reload messages array
+		this.messages = [];
 
 		// Load messages from conversation
 		current.messages.forEach(msg => {
 			this.addMessageToUI(msg.role, msg.content, msg.id);
+			// Also add to messages array
+			this.messages.push({ role: msg.role, content: msg.content, id: msg.id });
 		});
 
 		// Scroll to bottom
