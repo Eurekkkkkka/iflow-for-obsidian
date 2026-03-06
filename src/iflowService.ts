@@ -78,8 +78,14 @@ class AcpProtocol {
 	}
 
 	handleMessage(data: string): JsonRpcResponse | JsonRpcNotification | null {
+		// Skip debug/non-JSON messages
+		const trimmed = data.trim();
+		if (!trimmed || trimmed.startsWith('//')) {
+			return null;
+		}
+
 		try {
-			const message = JSON.parse(data) as JsonRpcResponse | JsonRpcNotification;
+			const message = JSON.parse(trimmed) as JsonRpcResponse | JsonRpcNotification;
 
 			// Handle response
 			if ('id' in message && typeof message.id !== 'undefined') {
@@ -278,8 +284,10 @@ export class IFlowService {
 						}));
 					}
 
-					// Check for end signal
-					if (update.status === 'done' || update.done) {
+					// Check for end signal - ACP sends task_finish or completion
+					if (update.sessionUpdate === 'task_finish' ||
+						update.status === 'done' ||
+						update.done) {
 						this.messageHandlers.forEach(handler => handler({
 							type: 'end',
 						}));
@@ -290,7 +298,22 @@ export class IFlowService {
 	}
 
 	private extractContentFromUpdate(update: any): string | null {
-		// Try various fields that might contain text content
+		// ACP session/update format: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '...' } }
+		if (update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'agent_thought_chunk') {
+			const content = update.content;
+			if (content && typeof content === 'object') {
+				// Standard ACP format
+				if (content.type === 'text' && typeof content.text === 'string') {
+					return content.text;
+				}
+				// Direct text field
+				if (typeof content.text === 'string') {
+					return content.text;
+				}
+			}
+		}
+
+		// Legacy/direct formats
 		if (typeof update === 'string') {
 			return update;
 		}
