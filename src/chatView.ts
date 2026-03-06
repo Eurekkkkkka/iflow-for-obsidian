@@ -317,16 +317,20 @@ export class IFlowChatView extends ItemView {
 
 		this.availableModes = modes;
 
-		// Current mode label
-		const currentMode = modes.find(m => m.id === this.currentMode);
-		const label = selector.createSpan({
-			cls: 'iflow-mode-label',
-			text: currentMode?.name || 'Normal'
+		// Trigger button (like model selector)
+		const btn = selector.createEl('button', {
+			cls: 'iflow-mode-btn',
 		});
 
-		const icon = selector.createSpan({
-			text: currentMode?.icon || '⚡'
-		});
+		const currentMode = modes.find(m => m.id === this.currentMode);
+		const icon = btn.createSpan({ cls: 'iflow-mode-icon', text: currentMode?.icon || '⚡' });
+		const label = btn.createSpan({ cls: 'iflow-mode-label', text: currentMode?.name || 'Normal' });
+		const chevron = btn.createDiv({ cls: 'iflow-mode-chevron' });
+		chevron.innerHTML = `
+			<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+				<polyline points="6 9 12 15 18 9"></polyline>
+			</svg>
+		`;
 
 		// Dropdown
 		const dropdown = selector.createDiv({ cls: 'iflow-mode-dropdown' });
@@ -336,12 +340,12 @@ export class IFlowChatView extends ItemView {
 				cls: `iflow-mode-option ${mode.id === this.currentMode ? 'selected' : ''}`,
 				attr: { 'data-mode': mode.id },
 			}, (el) => {
-				el.createSpan({ cls: 'iflow-mode-icon', text: mode.icon });
-				el.createSpan({ text: mode.name });
+				const optIcon = el.createSpan({ cls: 'iflow-mode-icon', text: mode.icon });
+				const optLabel = el.createSpan({ text: mode.name });
 				el.onclick = () => {
 					this.currentMode = mode.id;
-					label.textContent = mode.name;
 					icon.textContent = mode.icon;
+					label.textContent = mode.name;
 					dropdown.querySelectorAll('.iflow-mode-option').forEach(opt => {
 						opt.removeClass('selected');
 					});

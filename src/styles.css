@@ -369,6 +369,7 @@
 	overflow-y: auto;
 }
 
+.iflow-model-btn:hover + .iflow-model-dropdown,
 .iflow-model-selector:hover .iflow-model-dropdown,
 .iflow-model-dropdown:focus-within {
 	opacity: 1;
@@ -408,18 +409,32 @@
    Mode Selector (Permission Toggle)
 ============================================ */
 .iflow-mode-selector {
+	position: relative;
 	display: flex;
 	align-items: center;
-	gap: 8px;
+}
+
+.iflow-mode-btn {
+	display: flex;
+	align-items: center;
+	gap: 4px;
 	padding: 4px 8px;
 	border-radius: 6px;
+	cursor: pointer;
 	background: var(--background-secondary);
 	border: 1px solid var(--background-modifier-border);
+	color: var(--text-muted);
+	font-size: 12px;
+	transition: all 0.2s ease;
+}
+
+.iflow-mode-btn:hover {
+	color: var(--text-normal);
+	background: var(--background-modifier-hover);
 }
 
 .iflow-mode-label {
 	font-size: 11px;
-	color: var(--text-muted);
 	font-weight: 500;
 	min-width: 40px;
 	text-transform: uppercase;
@@ -451,10 +466,21 @@
 	transition: opacity 0.15s ease, visibility 0.15s ease;
 }
 
+.iflow-mode-btn:hover + .iflow-mode-dropdown,
 .iflow-mode-selector:hover .iflow-mode-dropdown,
 .iflow-mode-dropdown:focus-within {
 	opacity: 1;
 	visibility: visible;
+}
+
+.iflow-mode-chevron {
+	display: flex;
+	align-items: center;
+}
+
+.iflow-mode-chevron svg {
+	width: 12px;
+	height: 12px;
 }
 
 .iflow-mode-option {
