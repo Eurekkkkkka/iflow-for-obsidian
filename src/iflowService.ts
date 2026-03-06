@@ -1,5 +1,4 @@
 import { Notice } from 'obsidian';
-import WebSocket from 'ws';
 
 export interface IFlowMessage {
 	type: 'stream' | 'tool' | 'question' | 'plan' | 'error' | 'end';
@@ -46,16 +45,16 @@ export class IFlowService {
 				resolve(false);
 			}, this.timeout);
 
-			ws.on('open', () => {
+			ws.onopen = () => {
 				clearTimeout(timeoutId);
 				ws.close();
 				resolve(true);
-			});
+			};
 
-			ws.on('error', () => {
+			ws.onerror = () => {
 				clearTimeout(timeoutId);
 				resolve(false);
-			});
+			};
 		});
 	}
 
@@ -73,16 +72,16 @@ export class IFlowService {
 				reject(new Error('Connection timeout'));
 			}, this.timeout);
 
-			this.ws.on('open', () => {
+			this.ws.onopen = () => {
 				clearTimeout(timeoutId);
 				this.isConnected = true;
 				console.log('iFlow WebSocket connected');
 				resolve();
-			});
+			};
 
-			this.ws.on('message', (data: Buffer) => {
+			this.ws.onmessage = (event: MessageEvent) => {
 				try {
-					const messages = data.toString().split('\n').filter(line => line.trim());
+					const messages = event.data.toString().split('\n').filter(line => line.trim());
 					for (const line of messages) {
 						const msg = JSON.parse(line) as IFlowMessage;
 						this.messageHandlers.forEach(handler => handler(msg));
@@ -90,15 +89,15 @@ export class IFlowService {
 				} catch (error) {
 					console.error('Failed to parse iFlow message:', error);
 				}
-			});
+			};
 
-			this.ws.on('error', (error: Error) => {
+			this.ws.onerror = (error: Event) => {
 				clearTimeout(timeoutId);
 				console.error('iFlow WebSocket error:', error);
-				reject(error);
-			});
+				reject(new Error('WebSocket connection failed'));
+			};
 
-			this.ws.on('close', () => {
+			this.ws.onclose = () => {
 				this.isConnected = false;
 				console.log('iFlow WebSocket disconnected');
 
@@ -111,7 +110,7 @@ export class IFlowService {
 						console.error('Reconnection failed:', err);
 					});
 				}, 5000);
-			});
+			};
 		});
 	}
 
