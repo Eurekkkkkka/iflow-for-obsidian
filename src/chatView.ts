@@ -334,7 +334,15 @@ export class IFlowChatView extends ItemView {
 	}
 
 	private scrollToBottom(): void {
-		this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+		// Use requestAnimationFrame to ensure DOM has updated
+		requestAnimationFrame(() => {
+			this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+		});
+
+		// Double-check with a small delay to handle async updates
+		setTimeout(() => {
+			this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+		}, 10);
 	}
 
 	// ============================================

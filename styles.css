@@ -268,11 +268,13 @@
 .iflow-messages {
 	flex: 1;
 	overflow-y: auto;
+	overflow-x: hidden;
 	padding: 16px 12px;
 	display: flex;
 	flex-direction: column;
 	gap: 12px;
 	min-height: 0;
+	scroll-behavior: smooth;
 }
 
 /* Scrollbar styling */
