@@ -262,6 +262,12 @@ export class IFlowService {
 	private handleIncomingMessage(data: string): void {
 		if (!this.protocol) return;
 
+		// Log all incoming messages for debugging
+		const trimmed = data.trim();
+		if (!trimmed.startsWith('//')) {
+			console.log('[iFlow] Received message:', trimmed.substring(0, 200));
+		}
+
 		const message = this.protocol.handleMessage(data);
 
 		if (!message) {
@@ -271,13 +277,16 @@ export class IFlowService {
 		// Handle JSON-RPC notifications
 		if (!('id' in message)) {
 			const notification = message as JsonRpcNotification;
+			console.log('[iFlow] Notification:', notification.method);
 
 			// Handle session/update notifications (stream content)
 			if (notification.method === 'session/update') {
 				const update = notification.params;
+				console.log('[iFlow] Update type:', update?.sessionUpdate);
 				if (update && typeof update === 'object') {
 					const content = this.extractContentFromUpdate(update);
 					if (content) {
+						console.log('[iFlow] Content:', content.substring(0, 100));
 						this.messageHandlers.forEach(handler => handler({
 							type: 'stream',
 							content,
@@ -288,6 +297,7 @@ export class IFlowService {
 					if (update.sessionUpdate === 'task_finish' ||
 						update.status === 'done' ||
 						update.done) {
+						console.log('[iFlow] Task finished');
 						this.messageHandlers.forEach(handler => handler({
 							type: 'end',
 						}));
