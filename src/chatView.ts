@@ -1,6 +1,7 @@
 import { ItemView, WorkspaceLeaf, TFile, MarkdownView } from 'obsidian';
 import IFlowPlugin from './main';
 import { IFlowService } from './iflowService';
+import { ConversationStore, type Conversation, type Message } from './conversationStore';
 import type { IFlowSettings } from './main';
 
 export const VIEW_TYPE_IFLOW_CHAT = 'iflow-chat-view';
@@ -8,6 +9,7 @@ export const VIEW_TYPE_IFLOW_CHAT = 'iflow-chat-view';
 export class IFlowChatView extends ItemView {
 	plugin: IFlowPlugin;
 	iflowService: IFlowService;
+	private conversationStore: ConversationStore;
 	private messages: { role: string; content: string; id: string }[] = [];
 	private currentMessage = '';
 	private isStreaming = false;
@@ -21,10 +23,18 @@ export class IFlowChatView extends ItemView {
 	private availableModels: any[] = [];
 	private availableModes: any[] = [];
 
+	// Conversation management
+	private currentConversationId: string | null = null;
+	private conversationTitleEl: HTMLElement | null = null;
+
 	constructor(leaf: WorkspaceLeaf, plugin: IFlowPlugin, iflowService: IFlowService) {
 		super(leaf);
 		this.plugin = plugin;
 		this.iflowService = iflowService;
+		this.conversationStore = new ConversationStore();
+
+		// Subscribe to conversation changes
+		this.conversationStore.subscribe(() => this.onConversationChange());
 	}
 
 	getViewType(): string {
@@ -46,6 +56,10 @@ export class IFlowChatView extends ItemView {
 
 		// Create chat UI
 		const chatContainer = container.createDiv({ cls: 'iflow-chat' });
+
+		// Top bar with conversation selector
+		const topBar = chatContainer.createDiv({ cls: 'iflow-top-bar' });
+		this.createConversationSelector(topBar);
 
 		// Messages container
 		const messagesContainer = chatContainer.createDiv({ cls: 'iflow-messages' });
@@ -129,6 +143,11 @@ export class IFlowChatView extends ItemView {
 			return;
 		}
 
+		// Ensure we have a conversation
+		if (!this.currentConversationId) {
+			this.createNewConversation();
+		}
+
 		// Get context
 		const activeFile = this.plugin.getActiveFile();
 		let fileContent = '';
@@ -153,9 +172,14 @@ export class IFlowChatView extends ItemView {
 			}
 		}
 
-		// Add user message
-		this.addMessage('user', content);
+		// Add user message to UI
+		const userMsgId = this.addMessage('user', content);
 		this.textarea.value = '';
+
+		// Add user message to conversation
+		if (this.currentConversationId) {
+			this.conversationStore.addUserMessage(this.currentConversationId, content);
+		}
 
 		// Add assistant message placeholder
 		const assistantMsgId = this.addMessage('assistant', '');
@@ -187,6 +211,14 @@ export class IFlowChatView extends ItemView {
 				},
 				onEnd: () => {
 					this.isStreaming = false;
+
+					// Save assistant message to conversation
+					if (this.currentConversationId && this.currentMessage) {
+						this.conversationStore.addAssistantMessage(
+							this.currentConversationId,
+							this.currentMessage
+						);
+					}
 				},
 				onError: (error: string) => {
 					this.isStreaming = false;
@@ -381,6 +413,249 @@ export class IFlowChatView extends ItemView {
 		};
 
 		return toggle;
+	}
+
+	// ============================================
+	// Conversation Management
+	// ============================================
+
+	private createConversationSelector(container: HTMLElement): void {
+		const selector = container.createDiv({ cls: 'iflow-conversation-selector' });
+
+		// Current conversation trigger
+		const trigger = selector.createEl('button', {
+			cls: 'iflow-conversation-trigger',
+		});
+
+		this.conversationTitleEl = trigger.createSpan({
+			cls: 'iflow-conversation-title',
+			text: 'New Conversation',
+		});
+
+		const meta = trigger.createSpan({ cls: 'iflow-conversation-meta', text: '0 messages' });
+
+		const chevron = trigger.createDiv({ cls: 'iflow-conversation-chevron' });
+		chevron.innerHTML = `
+			<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+				<polyline points="6 9 12 15 18 9"></polyline>
+			</svg>
+		`;
+
+		// New conversation button
+		const newBtn = selector.createEl('button', {
+			cls: 'iflow-new-conversation-btn',
+			text: '+',
+		});
+		newBtn.onclick = () => this.createNewConversation();
+
+		// Conversation dropdown panel
+		const panel = selector.createDiv({ cls: 'iflow-conversation-panel' });
+
+		// Search box
+		const searchBox = panel.createDiv({ cls: 'iflow-conversation-search' });
+		const searchInput = searchBox.createEl('input', {
+			type: 'text',
+			placeholder: 'Search conversations...',
+		});
+
+		// Conversation list
+		const list = panel.createDiv({ cls: 'iflow-conversation-list' });
+		this.renderConversationList(list);
+
+		// Update trigger meta
+		this.updateConversationMeta(meta);
+
+		// Store references for later updates
+		(this as any).conversationPanel = panel;
+		(this as any).conversationList = list;
+		(this as any).conversationMeta = meta;
+	}
+
+	private renderConversationList(listContainer: HTMLElement): void {
+		listContainer.empty();
+
+		const state = this.conversationStore.getState();
+
+		// Group conversations by date
+		const today = new Date();
+		today.setHours(0, 0, 0, 0);
+
+		const todayConversations = state.conversations.filter(c => {
+			const date = new Date(c.updatedAt);
+			return date >= today;
+		});
+
+		if (todayConversations.length > 0) {
+			const groupLabel = listContainer.createDiv({
+				cls: 'iflow-conversation-group-label',
+				text: 'Today',
+			});
+
+			todayConversations.forEach(conv => {
+				this.renderConversationItem(listContainer, conv);
+			});
+		}
+
+		if (state.conversations.length === 0) {
+			listContainer.createDiv({
+				cls: 'iflow-conversation-empty',
+				text: 'No conversations yet',
+			});
+		}
+	}
+
+	private renderConversationItem(container: HTMLElement, conversation: Conversation): void {
+		const item = container.createDiv({
+			cls: `iflow-conversation-item ${conversation.id === this.currentConversationId ? 'active' : ''}`,
+		});
+
+		const info = item.createDiv({ cls: 'iflow-conversation-item-info' });
+
+		const title = info.createDiv({
+			cls: 'iflow-conversation-item-title',
+			text: conversation.title,
+		});
+
+		const meta = info.createDiv({ cls: 'iflow-conversation-item-meta' });
+		meta.createSpan({ text: `${conversation.messages.length} messages` });
+
+		const time = item.createDiv({
+			cls: 'iflow-conversation-item-time',
+			text: this.formatTime(conversation.updatedAt),
+		});
+
+		// Delete button
+		const deleteBtn = item.createEl('button', {
+			cls: 'iflow-conversation-item-delete',
+			text: '×',
+		});
+		deleteBtn.onclick = (e) => {
+			e.stopPropagation();
+			this.deleteConversation(conversation.id);
+		};
+
+		item.onclick = () => {
+			this.switchConversation(conversation.id);
+		};
+	}
+
+	private formatTime(timestamp: number): string {
+		const date = new Date(timestamp);
+		const now = new Date();
+		const diffMs = now.getTime() - date.getTime();
+		const diffMins = Math.floor(diffMs / 60000);
+		const diffHours = Math.floor(diffMs / 3600000);
+
+		if (diffMins < 1) return 'now';
+		if (diffMins < 60) return `${diffMins}m`;
+		if (diffHours < 24) return `${diffHours}h`;
+		return date.toLocaleDateString();
+	}
+
+	private updateConversationMeta(meta: HTMLElement): void {
+		const current = this.conversationStore.getCurrentConversation();
+		if (current) {
+			meta.textContent = `${current.messages.length} messages`;
+		} else {
+			meta.textContent = '0 messages';
+		}
+	}
+
+	private onConversationChange(): void {
+		const state = this.conversationStore.getState();
+		this.currentConversationId = state.currentConversationId;
+
+		// Update title
+		const current = this.conversationStore.getCurrentConversation();
+		if (this.conversationTitleEl && current) {
+			this.conversationTitleEl.textContent = current.title;
+		}
+
+		// Reload messages
+		this.loadMessagesFromConversation();
+
+		// Re-render list
+		const list = (this as any).conversationList as HTMLElement;
+		if (list) {
+			this.renderConversationList(list);
+		}
+
+		// Update meta
+		const meta = (this as any).conversationMeta as HTMLElement;
+		if (meta) {
+			this.updateConversationMeta(meta);
+		}
+	}
+
+	private createNewConversation(): void {
+		const conversation = this.conversationStore.newConversation(
+			this.currentModel as any,
+			this.currentMode as any,
+			this.thinkingEnabled
+		);
+
+		this.currentConversationId = conversation.id;
+		this.messages = [];
+		this.messagesContainer.empty();
+
+		// Update title
+		if (this.conversationTitleEl) {
+			this.conversationTitleEl.textContent = conversation.title;
+		}
+
+		// Re-render list
+		const list = (this as any).conversationList as HTMLElement;
+		if (list) {
+			this.renderConversationList(list);
+		}
+
+		// Update meta
+		const meta = (this as any).conversationMeta as HTMLElement;
+		if (meta) {
+			this.updateConversationMeta(meta);
+		}
+	}
+
+	private switchConversation(conversationId: string): void {
+		this.conversationStore.switchConversation(conversationId);
+		// onConversationChange will be called automatically
+	}
+
+	private deleteConversation(conversationId: string): void {
+		this.conversationStore.deleteConversation(conversationId);
+		// onConversationChange will be called automatically
+	}
+
+	private loadMessagesFromConversation(): void {
+		this.messagesContainer.empty();
+
+		const current = this.conversationStore.getCurrentConversation();
+		if (!current) {
+			// Show welcome message if no conversation
+			this.addWelcomeMessage();
+			return;
+		}
+
+		// Load messages from conversation
+		current.messages.forEach(msg => {
+			this.addMessageToUI(msg.role, msg.content, msg.id);
+		});
+
+		// Scroll to bottom
+		this.scrollToBottom();
+	}
+
+	private addMessageToUI(role: string, content: string, id: string): void {
+		const messageEl = this.messagesContainer.createDiv({
+			cls: `iflow-message iflow-message-${role}`,
+		});
+		messageEl.dataset.id = id;
+
+		const roleEl = messageEl.createDiv({ cls: 'iflow-message-role' });
+		roleEl.textContent = role === 'user' ? 'You' : 'iFlow';
+
+		const contentEl = messageEl.createDiv({ cls: 'iflow-message-content' });
+		contentEl.innerHTML = this.formatMessage(content);
 	}
 
 	// ============================================
