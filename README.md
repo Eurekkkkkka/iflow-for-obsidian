@@ -20,9 +20,25 @@
 
 - **Obsidian** v1.8.9 或更高版本
 - **iFlow CLI** 已安装并运行
-  - 安装：`npm install -g @iflow-ai/iflow-cli@latest`
-  - 启动：`iflow`
+  - 启动：`iflow`（默认监听端口 8080）
 - **仅桌面端**：macOS、Linux、Windows
+
+## 📚 文档
+
+- [开发文档](DEVELOPMENT.md) - 详细的开发指南和架构说明
+- [快速参考](CHEATSHEET.md) - 常用命令和代码片段速查
+
+## 🔄 更新日志
+
+### v0.5.3 (2026-03-06)
+- 改进自动滚动到底部的功能
+- 使用 requestAnimationFrame 实现更平滑的滚动
+- 添加 double-check 机制处理异步 DOM 更新
+
+### v0.5.2 (2026-03-06)
+- 修复流式传输完成后 onEnd 回调未触发的问题
+- 修复 isStreaming 状态未正确重置导致的消息丢失问题
+- 添加流式传输期间防止重复加载消息的保护机制
 
 ## 🚀 安装
 
