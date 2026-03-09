@@ -9,6 +9,7 @@ iFlow for Obsidian - An Obsidian plugin that embeds iFlow CLI as a sidebar chat 
 ```bash
 npm run dev        # Development (watch mode, auto-compile)
 npm run build      # Production build
+npm run version    # Bump version and update files
 ```
 
 ## Architecture
@@ -20,7 +21,7 @@ src/
 ├── main.ts                 # Plugin entry point, settings management
 ├── chatView.ts             # Chat view UI, core interaction logic ⭐ CORE
 ├── iflowService.ts         # iFlow CLI WebSocket communication (ACP protocol) ⭐ CORE
-├── conversationStore.ts    # Conversation persistence (localStorage)
+├── conversationStore.ts    # Conversation persistence with vault isolation ⭐ CORE
 └── styles.css              # Plugin styles
 ```
 
@@ -29,9 +30,9 @@ src/
 | Component | Purpose | Key Details |
 |-----------|---------|-------------|
 | **IFlowPlugin** (main.ts) | Plugin lifecycle, settings | Manages ribbon icon, view registration, settings UI |
-| **IFlowChatView** (chatView.ts) | Chat UI and message handling | Handles streaming, scrolling, conversation switching |
+| **IFlowChatView** (chatView.ts) | Chat UI and message handling | Handles streaming, scrolling, conversation switching, export/import |
 | **IFlowService** (iflowService.ts) | WebSocket communication | ACP protocol (JSON-RPC 2.0), manages connection |
-| **ConversationStore** (conversationStore.ts) | Data persistence | localStorage, pub/sub pattern for updates |
+| **ConversationStore** (conversationStore.ts) | Data persistence | Vault-isolated localStorage, pub/sub, export/import |
 
 ## Critical Technical Details
 
@@ -95,6 +96,30 @@ private async sendMessage() {
 }
 ```
 
+### Conversation Panel State Management
+
+The conversation panel uses explicit state management (not hover-based):
+
+```typescript
+// State
+private showConversationPanel = false;
+
+// Methods
+toggleConversationPanel(): void {
+    this.showConversationPanel = !this.showConversationPanel;
+    this.updateConversationPanelVisibility();
+}
+
+closeConversationPanel(): void {
+    this.showConversationPanel = false;
+    this.updateConversationPanelVisibility();
+}
+
+updateConversationPanelVisibility(): void {
+    // Toggle .hidden class and aria-expanded
+}
+```
+
 ### Conversation Change Handling
 
 **CRITICAL:** Don't reload messages during streaming (causes messages to disappear):
@@ -154,10 +179,133 @@ private scrollToBottom(): void {
 
 ```
 1. Add message → conversationStore.addUserMessage()
-2. Update state + save to localStorage
+2. Update state + save to localStorage (vault-isolated)
 3. Trigger notify()
 4. All subscribers receive onConversationChange()
 5. UI updates (unless streaming)
+```
+
+### Vault-Isolated Storage
+
+```
+1. Get vault path: plugin.getVaultPath()
+2. Hash path to create unique storage key
+3. Each vault has isolated conversation data
+4. Storage key format: iflow-conversations-{hash}
+```
+
+## Conversation Store API
+
+### Core Methods
+
+```typescript
+// Conversation management
+newConversation(model, mode, think): Conversation
+switchConversation(id): void
+deleteConversation(id): void
+getCurrentConversation(): Conversation | null
+
+// Message operations
+addUserMessage(id, content): Message
+addAssistantMessage(id, content): Message
+updateAssistantMessage(convId, msgId, content): void
+
+// State
+getState(): ConversationState
+subscribe(callback): () => void
+```
+
+### Export/Import API
+
+```typescript
+// Export to JSON (complete data backup)
+const json = store.exportToJSON();
+// Returns: JSON string with all conversations
+
+// Export to Markdown (human-readable)
+const md = store.exportToMarkdown(conversationId);
+// Returns: Markdown formatted conversation(s)
+
+// Import from JSON (merge strategy)
+const result = store.importFromJSON(jsonString);
+// Returns: { success, message, imported }
+```
+
+### Storage Quota API
+
+```typescript
+const quota = store.getStorageQuota();
+// Returns:
+{
+    usedBytes: number;        // Current usage
+    totalBytes: number;       // Max allowed (4MB)
+    percentUsed: number;      // 0-1
+    approachingLimit: boolean; // > 80%
+    atLimit: boolean;         // > 95%
+}
+```
+
+### Statistics API
+
+```typescript
+const stats = store.getStats();
+// Returns:
+{
+    totalConversations: number;
+    totalMessages: number;
+    oldestConversation?: Date;
+    newestConversation?: Date;
+}
+```
+
+### Data Management
+
+```typescript
+// Clear all conversations
+store.clearAll(): void
+
+// Auto-cleanup happens when:
+// - Storage exceeds 4MB limit
+// - Keeps most recent 50 conversations
+// - Sorted by updatedAt timestamp
+```
+
+## Data Structures
+
+### Conversation
+
+```typescript
+interface Conversation {
+    id: string;
+    title: string;
+    messages: Message[];
+    mode: ConversationMode;  // "default" | "yolo" | "plan" | "smart"
+    think: boolean;
+    model: ModelType;
+    createdAt: number;
+    updatedAt: number;
+}
+```
+
+### Message
+
+```typescript
+interface Message {
+    id: string;
+    role: "user" | "assistant";
+    content: string;
+    timestamp: number;
+}
+```
+
+### Persisted State
+
+```typescript
+interface PersistedState extends ConversationState {
+    version: number;         // For data migration
+    createdAt: number;
+    updatedAt: number;
+}
 ```
 
 ## Common Bugs & Fixes
@@ -200,6 +348,20 @@ if (this.isStreaming) {
 if (this.isStreaming) return;
 ```
 
+### Bug #4: Conversation panel doesn't toggle
+
+**Symptom:** Clicking conversation title doesn't show/hide panel
+
+**Root Cause:** Missing click handler and state management
+
+**Fix:** Add explicit toggle with state:
+```typescript
+trigger.onclick = (e) => {
+    e.stopPropagation();
+    this.toggleConversationPanel();
+};
+```
+
 ## Development Workflow
 
 ### Making Changes
@@ -218,6 +380,17 @@ Always test:
 - ✅ Messages persist after closing/reopening chat
 - ✅ Auto-scroll works during streaming
 - ✅ Conversation switching works
+- ✅ Panel toggles on click
+- ✅ Panel closes when clicking outside
+
+### Testing Conversation Management
+
+- ✅ New conversation creates empty state
+- ✅ Conversations persist across reloads
+- ✅ Switching conversations loads correct messages
+- ✅ Deleting conversations works correctly
+- ✅ Search filters conversations
+- ✅ Export/import preserves data
 
 ### Debugging
 
@@ -226,18 +399,34 @@ Always test:
 console.log('[iFlow Chat] sendMessage called', { isStreaming, content });
 console.log('[iFlow] Stream complete, stopReason:', result.stopReason);
 console.log('[iFlow Chat] onEnd called');
+console.log('[ConversationStore] Storage quota:', quota);
 ```
 
 Check browser console:
 - `Ctrl/Cmd + Shift + I` → Console tab
-- Filter: `iFlow`
+- Filter: `iFlow`, `ConversationStore`
 
 ## Storage
 
 | Location | Contents |
 |----------|----------|
-| `localStorage` (key: 'iflow-conversations') | Conversation data (JSON) |
+| `localStorage` (key: `iflow-conversations-{hash}`) | Vault-specific conversation data (JSON) |
 | `localStorage` (key: 'iflow-settings') | Plugin settings |
+
+### Vault Isolation
+
+Each vault gets its own storage key based on path hash:
+- Prevents cross-vault data contamination
+- Allows independent conversation management per vault
+- Automatic migration from old global storage
+
+### Storage Limits
+
+- **Max size**: 4MB per vault
+- **Auto-cleanup**: Keeps 50 most recent conversations
+- **Warning thresholds**:
+  - 80%: Approaching limit
+  - 95%: At limit
 
 ## Settings
 
@@ -253,28 +442,60 @@ interface IFlowSettings {
 ## Release Process
 
 ```bash
-# 1. Update versions
+# 1. Make changes and test
+npm run dev
+
+# 2. Update versions
 vim manifest.json  # Update "version"
 vim package.json   # Update "version"
+vim versions.json  # Add new version entry
 
-# 2. Build
+# 3. Build
 npm run build
 
-# 3. Commit & push
+# 4. Commit & push
 git add -A
 git commit -m "feat: your changes"
 git push origin main
 
-# 4. Create release
+# 5. Create release with detailed notes
 gh release create v0.x.x main.js manifest.json styles.css \
-  --title "v0.x.x" \
+  --title "v0.x.x - Description" \
   --notes "Release notes"
 
-# 5. Users update via BRAT
+# 6. Users update via BRAT
+```
+
+### Release Notes Template
+
+```markdown
+## 🎉 New Features
+- Feature 1
+- Feature 2
+
+## 🐛 Bug Fixes
+- Bug fix 1
+- Bug fix 2
+
+## 📝 Technical Changes
+- Change 1
+- Change 2
+
+## 📦 Installation
+### BRAT (Recommended)
+1. Install BRAT plugin
+2. Add: https://github.com/junjie-yan/iflow-for-obsidian
+3. Enable plugin
+
+### Manual
+1. Download from releases
+2. Extract to .obsidian/plugins/iflow-for-obsidian/
+3. Enable in settings
 ```
 
 ## Reference Projects
 
+- [iFlow for VSCode](https://github.com/iflow-ai/iflow-vscode) - VSCode extension (reference implementation)
 - [Claudian](https://github.com/YishenTu/claudian) - Claude Code for Obsidian (inspiration)
 - [Obsidian Sample Plugin](https://github.com/obsidianmd/obsidian-sample-plugin) - Basic plugin template
 
@@ -286,6 +507,8 @@ gh release create v0.x.x main.js manifest.json styles.css \
 - **Use requestAnimationFrame for DOM updates** - ensures rendering happens
 - **Test second message send** - this is the most common failure mode
 - **Check browser console logs** - they reveal state issues
+- **Use vault-isolated storage** - each vault has independent data
+- **Monitor storage quota** - auto-cleanup prevents overflow
 
 ## When Adding Features
 
@@ -293,4 +516,7 @@ gh release create v0.x.x main.js manifest.json styles.css \
 2. **Consider streaming impact** - will it work during isStreaming?
 3. **Test conversation switching** - does state transfer correctly?
 4. **Verify persistence** - do changes save to localStorage?
-5. **Add debug logs** - help future debugging
+5. **Test export/import** - does data preserve correctly?
+6. **Check vault isolation** - does each vault have independent data?
+7. **Add debug logs** - help future debugging
+8. **Update documentation** - keep CLAUDE.md and README.md current
