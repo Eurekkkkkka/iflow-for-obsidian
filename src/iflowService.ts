@@ -764,7 +764,8 @@ export class IFlowService {
 		}
 
 		// Build prompt with context
-		let prompt = options.content;
+		// Add language instruction to ensure Chinese responses
+		let prompt = `【重要】请始终使用中文（简体）回复用户。所有输出、解释、代码注释都应使用中文。\n\n用户消息：${options.content}`;
 
 		// Detect if user wants to create a canvas file
 		const wantsCanvas = /canvas|思维导图|流程图|导图|可视化|graph|map|flowchart/i.test(prompt);

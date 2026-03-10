@@ -13,6 +13,9 @@ interface IFlowSettings {
 	excludedTags: string[];
 	language: string;
 	autoAttachFile: boolean;
+	lastUsedModel: string;
+	lastUsedMode: string;
+	lastUsedThinking: boolean;
 }
 
 const DEFAULT_SETTINGS: IFlowSettings = {
@@ -22,6 +25,9 @@ const DEFAULT_SETTINGS: IFlowSettings = {
 	excludedTags: ['private', 'sensitive'],
 	language: 'zh-CN',
 	autoAttachFile: true,
+	lastUsedModel: 'glm-4.7',
+	lastUsedMode: 'default',
+	lastUsedThinking: false,
 }
 
 export default class IFlowPlugin extends Plugin {

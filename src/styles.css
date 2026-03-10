@@ -498,6 +498,34 @@
 }
 
 /* ============================================
+   Control Bar (Model + Mode Selectors)
+============================================ */
+.iflow-control-bar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 8px 12px;
+	background: var(--background-secondary);
+	border-bottom: 1px solid var(--background-modifier-border);
+	flex-shrink: 0;
+	gap: 8px;
+}
+
+.iflow-control-right {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+/* ============================================
+   Context Area
+============================================ */
+.iflow-context-area {
+	flex-shrink: 0;
+	background: var(--background-primary);
+}
+
+/* ============================================
    Input Area
 ============================================ */
 .iflow-input-container {
@@ -506,18 +534,6 @@
 	padding: 12px;
 	background: var(--background-primary);
 	border-top: 1px solid var(--background-modifier-border);
-	overflow: visible;
-}
-
-/* Input nav row (model selector, mode selector) */
-.iflow-input-nav-row {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	padding: 0 0 8px 0;
-	min-height: 0;
-	gap: 8px;
-	flex-wrap: wrap;
 }
 
 /* Input wrapper */

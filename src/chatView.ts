@@ -36,10 +36,10 @@ export class IFlowChatView extends ItemView {
 	private currentMessage = '';
 	private isStreaming = false;
 
-	// Settings
-	private currentModel = 'glm-4.7';
-	private currentMode = 'default';
-	private thinkingEnabled = false;
+	// Settings - will be loaded from plugin settings
+	private currentModel: string;
+	private currentMode: string;
+	private thinkingEnabled: boolean;
 
 	// Available models and modes from iFlow CLI
 	private availableModels: any[] = [];
@@ -69,6 +69,11 @@ export class IFlowChatView extends ItemView {
 		super(leaf);
 		this.plugin = plugin;
 		this.iflowService = iflowService;
+
+		// Load user preferences from settings
+		this.currentModel = plugin.settings.lastUsedModel || 'glm-4.7';
+		this.currentMode = plugin.settings.lastUsedMode || 'default';
+		this.thinkingEnabled = plugin.settings.lastUsedThinking || false;
 
 		// Initialize i18n
 		initI18n();
@@ -105,27 +110,34 @@ export class IFlowChatView extends ItemView {
 		const topBar = chatContainer.createDiv({ cls: 'iflow-top-bar' });
 		this.createConversationSelector(topBar);
 
-		// Messages container
+		// Control bar (model + mode selectors) - moved to top
+		const controlBar = chatContainer.createDiv({ cls: 'iflow-control-bar' });
+		
+		// Left side: Model selector
+		const modelSelector = this.createModelSelector(controlBar);
+
+		// Right side: Mode selector and thinking toggle
+		const rightControls = controlBar.createDiv({ cls: 'iflow-control-right' });
+		const modeSelector = this.createModeSelector(rightControls);
+		const thinkingToggle = this.createThinkingToggle(rightControls);
+
+		// Add context area (image preview + file indicator)
+		const contextArea = chatContainer.createDiv({ cls: 'iflow-context-area' });
+		
+		// Image preview area
+		this.imagePreviewEl = contextArea.createDiv({ cls: 'iflow-image-preview' });
+		this.imagePreviewEl.style.display = 'none';
+		
+		// File context indicator with remove button
+		const contextIndicator = contextArea.createDiv({ cls: 'iflow-context-indicator' });
+		this.contextIndicator = contextIndicator;
+
+		// Messages container - independent scrolling
 		const messagesContainer = chatContainer.createDiv({ cls: 'iflow-messages' });
 		this.messagesContainer = messagesContainer;
 
-		// Input container
+		// Input container - fixed at bottom
 		const inputContainer = chatContainer.createDiv({ cls: 'iflow-input-container' });
-
-		// Input nav row (model selector, mode selector, thinking toggle)
-		const navRow = inputContainer.createDiv({ cls: 'iflow-input-nav-row' });
-
-		// Left side: Model selector
-		const modelSelector = this.createModelSelector(navRow);
-
-		// Right side: Mode selector and thinking toggle
-		const rightControls = navRow.createDiv({ cls: 'iflow-input-controls-right' });
-		rightControls.style.display = 'flex';
-		rightControls.style.gap = '8px';
-		rightControls.style.alignItems = 'center';
-
-		const modeSelector = this.createModeSelector(rightControls);
-		const thinkingToggle = this.createThinkingToggle(rightControls);
 
 		// Input wrapper
 		const inputWrapper = inputContainer.createDiv({ cls: 'iflow-input-wrapper' });
@@ -151,17 +163,6 @@ export class IFlowChatView extends ItemView {
 				this.sendMessage();
 			}
 		});
-
-		// Add context area (image preview + file indicator)
-		const contextArea = chatContainer.createDiv({ cls: 'iflow-context-area' });
-		
-		// Image preview area
-		this.imagePreviewEl = contextArea.createDiv({ cls: 'iflow-image-preview' });
-		this.imagePreviewEl.style.display = 'none';
-		
-		// File context indicator with remove button
-		const contextIndicator = contextArea.createDiv({ cls: 'iflow-context-indicator' });
-		this.contextIndicator = contextIndicator;
 
 		// Setup drag/drop for images
 		this.setupImageDropAndPaste(inputWrapper);
@@ -801,7 +802,7 @@ export class IFlowChatView extends ItemView {
 				cls: `iflow-model-option ${model.id === this.currentModel ? 'selected' : ''}`,
 				text: model.name,
 			}, (el) => {
-				el.onclick = (e) => {
+				el.onclick = async (e) => {
 					e.stopPropagation();
 					this.currentModel = model.id;
 					label.textContent = model.name;
@@ -809,6 +810,9 @@ export class IFlowChatView extends ItemView {
 						opt.removeClass('selected');
 					});
 					el.addClass('selected');
+					// Save user preference
+					this.plugin.settings.lastUsedModel = model.id;
+					await this.plugin.saveSettings();
 					// Close dropdown after selection
 					selector.removeClass('open');
 				};
@@ -874,7 +878,7 @@ export class IFlowChatView extends ItemView {
 			}, (el) => {
 				const optIcon = el.createSpan({ cls: 'iflow-mode-icon', text: mode.icon });
 				const optLabel = el.createSpan({ text: mode.name });
-				el.onclick = (e) => {
+				el.onclick = async (e) => {
 					e.stopPropagation();
 					this.currentMode = mode.id;
 					icon.textContent = mode.icon;
@@ -883,6 +887,9 @@ export class IFlowChatView extends ItemView {
 						opt.removeClass('selected');
 					});
 					el.addClass('selected');
+					// Save user preference
+					this.plugin.settings.lastUsedMode = mode.id;
+					await this.plugin.saveSettings();
 					// Close dropdown after selection
 					selector.removeClass('open');
 				};
@@ -915,12 +922,20 @@ export class IFlowChatView extends ItemView {
 			cls: 'iflow-thinking-toggle',
 		});
 
+		// Apply saved state
+		if (this.thinkingEnabled) {
+			toggle.addClass('active');
+		}
+
 		const icon = toggle.createSpan({ cls: 'iflow-thinking-icon', text: '🧠' });
 		const label = toggle.createSpan({ text: t().ui.thinking });
 
-		toggle.onclick = () => {
+		toggle.onclick = async () => {
 			this.thinkingEnabled = !this.thinkingEnabled;
 			toggle.toggleClass('active', this.thinkingEnabled);
+			// Save user preference
+			this.plugin.settings.lastUsedThinking = this.thinkingEnabled;
+			await this.plugin.saveSettings();
 		};
 
 		return toggle;

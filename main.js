@@ -567,7 +567,9 @@ var IFlowService = class {
         console.warn(`[iFlow] Failed to set thinking: ${error}`);
       }
     }
-    let prompt = options.content;
+    let prompt = `\u3010\u91CD\u8981\u3011\u8BF7\u59CB\u7EC8\u4F7F\u7528\u4E2D\u6587\uFF08\u7B80\u4F53\uFF09\u56DE\u590D\u7528\u6237\u3002\u6240\u6709\u8F93\u51FA\u3001\u89E3\u91CA\u3001\u4EE3\u7801\u6CE8\u91CA\u90FD\u5E94\u4F7F\u7528\u4E2D\u6587\u3002
+
+\u7528\u6237\u6D88\u606F\uFF1A${options.content}`;
     const wantsCanvas = /canvas|思维导图|流程图|导图|可视化|graph|map|flowchart/i.test(prompt);
     if (wantsCanvas) {
       const canvasGuidance = `
@@ -1426,10 +1428,6 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     this.messages = [];
     this.currentMessage = "";
     this.isStreaming = false;
-    // Settings
-    this.currentModel = "glm-4.7";
-    this.currentMode = "default";
-    this.thinkingEnabled = false;
     // Available models and modes from iFlow CLI
     this.availableModels = [];
     this.availableModes = [];
@@ -1451,6 +1449,9 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     this.streamingTimeout = null;
     this.plugin = plugin;
     this.iflowService = iflowService;
+    this.currentModel = plugin.settings.lastUsedModel || "glm-4.7";
+    this.currentMode = plugin.settings.lastUsedMode || "default";
+    this.thinkingEnabled = plugin.settings.lastUsedThinking || false;
     initI18n();
     const vaultPath = this.plugin.getVaultPath();
     this.conversationStore = new ConversationStore(vaultPath);
@@ -1472,17 +1473,19 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     const chatContainer = container.createDiv({ cls: "iflow-chat" });
     const topBar = chatContainer.createDiv({ cls: "iflow-top-bar" });
     this.createConversationSelector(topBar);
+    const controlBar = chatContainer.createDiv({ cls: "iflow-control-bar" });
+    const modelSelector = this.createModelSelector(controlBar);
+    const rightControls = controlBar.createDiv({ cls: "iflow-control-right" });
+    const modeSelector = this.createModeSelector(rightControls);
+    const thinkingToggle = this.createThinkingToggle(rightControls);
+    const contextArea = chatContainer.createDiv({ cls: "iflow-context-area" });
+    this.imagePreviewEl = contextArea.createDiv({ cls: "iflow-image-preview" });
+    this.imagePreviewEl.style.display = "none";
+    const contextIndicator = contextArea.createDiv({ cls: "iflow-context-indicator" });
+    this.contextIndicator = contextIndicator;
     const messagesContainer = chatContainer.createDiv({ cls: "iflow-messages" });
     this.messagesContainer = messagesContainer;
     const inputContainer = chatContainer.createDiv({ cls: "iflow-input-container" });
-    const navRow = inputContainer.createDiv({ cls: "iflow-input-nav-row" });
-    const modelSelector = this.createModelSelector(navRow);
-    const rightControls = navRow.createDiv({ cls: "iflow-input-controls-right" });
-    rightControls.style.display = "flex";
-    rightControls.style.gap = "8px";
-    rightControls.style.alignItems = "center";
-    const modeSelector = this.createModeSelector(rightControls);
-    const thinkingToggle = this.createThinkingToggle(rightControls);
     const inputWrapper = inputContainer.createDiv({ cls: "iflow-input-wrapper" });
     const textarea = inputWrapper.createEl("textarea", {
       cls: "iflow-input",
@@ -1500,11 +1503,6 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
         this.sendMessage();
       }
     });
-    const contextArea = chatContainer.createDiv({ cls: "iflow-context-area" });
-    this.imagePreviewEl = contextArea.createDiv({ cls: "iflow-image-preview" });
-    this.imagePreviewEl.style.display = "none";
-    const contextIndicator = contextArea.createDiv({ cls: "iflow-context-indicator" });
-    this.contextIndicator = contextIndicator;
     this.setupImageDropAndPaste(inputWrapper);
     this.updateContext();
     this.registerEvent(
@@ -1988,7 +1986,7 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
         cls: `iflow-model-option ${model.id === this.currentModel ? "selected" : ""}`,
         text: model.name
       }, (el) => {
-        el.onclick = (e) => {
+        el.onclick = async (e) => {
           e.stopPropagation();
           this.currentModel = model.id;
           label.textContent = model.name;
@@ -1996,6 +1994,8 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
             opt.removeClass("selected");
           });
           el.addClass("selected");
+          this.plugin.settings.lastUsedModel = model.id;
+          await this.plugin.saveSettings();
           selector.removeClass("open");
         };
       });
@@ -2044,7 +2044,7 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
       }, (el) => {
         const optIcon = el.createSpan({ cls: "iflow-mode-icon", text: mode.icon });
         const optLabel = el.createSpan({ text: mode.name });
-        el.onclick = (e) => {
+        el.onclick = async (e) => {
           e.stopPropagation();
           this.currentMode = mode.id;
           icon.textContent = mode.icon;
@@ -2053,6 +2053,8 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
             opt.removeClass("selected");
           });
           el.addClass("selected");
+          this.plugin.settings.lastUsedMode = mode.id;
+          await this.plugin.saveSettings();
           selector.removeClass("open");
         };
       });
@@ -2076,11 +2078,16 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     const toggle = container.createEl("button", {
       cls: "iflow-thinking-toggle"
     });
+    if (this.thinkingEnabled) {
+      toggle.addClass("active");
+    }
     const icon = toggle.createSpan({ cls: "iflow-thinking-icon", text: "\u{1F9E0}" });
     const label = toggle.createSpan({ text: t().ui.thinking });
-    toggle.onclick = () => {
+    toggle.onclick = async () => {
       this.thinkingEnabled = !this.thinkingEnabled;
       toggle.toggleClass("active", this.thinkingEnabled);
+      this.plugin.settings.lastUsedThinking = this.thinkingEnabled;
+      await this.plugin.saveSettings();
     };
     return toggle;
   }
@@ -2340,7 +2347,10 @@ var DEFAULT_SETTINGS = {
   enableAutoScroll: true,
   excludedTags: ["private", "sensitive"],
   language: "zh-CN",
-  autoAttachFile: true
+  autoAttachFile: true,
+  lastUsedModel: "glm-4.7",
+  lastUsedMode: "default",
+  lastUsedThinking: false
 };
 var IFlowPlugin = class extends import_obsidian3.Plugin {
   constructor() {
