@@ -1,6 +1,7 @@
 import { App, Plugin, PluginSettingTab, Setting, Notice, WorkspaceLeaf, TFile, MarkdownView } from 'obsidian';
 import { IFlowService } from './iflowService';
 import { IFlowChatView, VIEW_TYPE_IFLOW_CHAT } from './chatView';
+import { initI18n, t, setLanguage, getCurrentLangCode } from './i18n';
 
 export { IFlowPlugin };
 export type { IFlowSettings };
@@ -10,6 +11,8 @@ interface IFlowSettings {
 	iflowTimeout: number;
 	enableAutoScroll: boolean;
 	excludedTags: string[];
+	language: string;
+	autoAttachFile: boolean;
 }
 
 const DEFAULT_SETTINGS: IFlowSettings = {
@@ -17,6 +20,8 @@ const DEFAULT_SETTINGS: IFlowSettings = {
 	iflowTimeout: 60000,
 	enableAutoScroll: true,
 	excludedTags: ['private', 'sensitive'],
+	language: 'zh-CN',
+	autoAttachFile: true,
 }
 
 export default class IFlowPlugin extends Plugin {
@@ -29,6 +34,9 @@ export default class IFlowPlugin extends Plugin {
 
 		// Load settings
 		await this.loadSettings();
+
+		// Initialize i18n with saved language setting
+		initI18n(this.settings.language);
 
 		// Initialize iFlow service
 		this.iflowService = new IFlowService(this.settings.iflowPort, this.settings.iflowTimeout, this.app);
@@ -134,9 +142,27 @@ class IFlowSettingTab extends PluginSettingTab {
 
 		containerEl.empty();
 
+		const settings = t().settings;
+
+		// Language setting
 		new Setting(containerEl)
-			.setName('iFlow CLI WebSocket Port')
-			.setDesc('The port number that iFlow CLI is listening on (default: 8090)')
+			.setName(settings.language)
+			.setDesc(settings.languageDesc)
+			.addDropdown(dropdown => dropdown
+				.addOption('zh-CN', '中文简体')
+				.addOption('en-US', 'English')
+				.setValue(this.plugin.settings.language)
+				.onChange(async (value) => {
+					this.plugin.settings.language = value;
+					await this.plugin.saveSettings();
+					setLanguage(value);
+					// Refresh settings page to apply new language
+					this.display();
+				}));
+
+		new Setting(containerEl)
+			.setName(settings.port)
+			.setDesc(settings.portDesc)
 			.addText(text => text
 				.setValue(String(this.plugin.settings.iflowPort))
 				.onChange(async (value) => {
@@ -148,8 +174,8 @@ class IFlowSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName('Connection Timeout (ms)')
-			.setDesc('Timeout for connecting to iFlow CLI (default: 60000)')
+			.setName(settings.timeout)
+			.setDesc(settings.timeoutDesc)
 			.addText(text => text
 				.setValue(String(this.plugin.settings.iflowTimeout))
 				.onChange(async (value) => {
@@ -161,8 +187,8 @@ class IFlowSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName('Enable Auto Scroll')
-			.setDesc('Automatically scroll to bottom during streaming responses')
+			.setName(settings.autoScroll)
+			.setDesc(settings.autoScrollDesc)
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.enableAutoScroll)
 				.onChange(async (value) => {
@@ -171,8 +197,18 @@ class IFlowSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName('Excluded Tags')
-			.setDesc('Notes with these tags will not be automatically attached to conversations (comma-separated)')
+			.setName(settings.autoAttachFile)
+			.setDesc(settings.autoAttachFileDesc)
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.autoAttachFile)
+				.onChange(async (value) => {
+					this.plugin.settings.autoAttachFile = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName(settings.excludedTags)
+			.setDesc(settings.excludedTagsDesc)
 			.addText(text => text
 				.setValue(this.plugin.settings.excludedTags.join(', '))
 				.onChange(async (value) => {
@@ -184,21 +220,20 @@ class IFlowSettingTab extends PluginSettingTab {
 				}));
 
 		// Add info about iFlow CLI
-		containerEl.createEl('h3', { text: 'iFlow CLI Requirements' });
+		containerEl.createEl('h3', { text: settings.cliRequirements });
 		containerEl.createEl('p', {
-			text: 'This plugin requires iFlow CLI to be installed and running. ' +
-				  'Install it with: npm install -g @iflow-ai/iflow-cli@latest'
+			text: settings.cliRequirementsDesc
 		});
 
 		// Connection status
 		const statusDiv = containerEl.createEl('div', { cls: 'iflow-status' });
-		statusDiv.createEl('p', { text: 'Connection Status: ' });
+		statusDiv.createEl('p', { text: settings.connectionStatus });
 		const statusText = statusDiv.createEl('span', { cls: 'iflow-status-text' });
-		statusText.textContent = 'Checking...';
+		statusText.textContent = settings.checking;
 
 		// Check connection
 		this.plugin.iflowService.checkConnection().then(connected => {
-			statusText.textContent = connected ? '✓ Connected' : '✗ Disconnected';
+			statusText.textContent = connected ? settings.connected : settings.disconnected;
 			statusText.className = 'iflow-status-text ' + (connected ? 'connected' : 'disconnected');
 		});
 	}

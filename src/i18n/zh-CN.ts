@@ -85,15 +85,53 @@ export const zhCN = {
 		assistant: 'iFlow',
 	},
 
-	// Context indicator
-	context: {
-		file: '📄 ',
-	},
-
 	// Errors
 	errors: {
 		streamingTimeout: '流式传输超时',
 		connectionFailed: '连接失败',
+	},
+
+	// Settings page
+	settings: {
+		title: 'iFlow for Obsidian 设置',
+		port: 'iFlow CLI WebSocket 端口',
+		portDesc: 'iFlow CLI 监听的端口号 (默认: 8090)',
+		timeout: '连接超时 (毫秒)',
+		timeoutDesc: '连接 iFlow CLI 的超时时间 (默认: 60000)',
+		autoScroll: '启用自动滚动',
+		autoScrollDesc: '在流式响应期间自动滚动到底部',
+		excludedTags: '排除标签',
+		excludedTagsDesc: '带有这些标签的笔记不会自动附加到对话中 (用逗号分隔)',
+		language: '界面语言',
+		languageDesc: '选择插件界面的显示语言',
+		languageOptions: {
+			'zh-CN': '中文简体',
+			'en-US': 'English',
+		},
+		cliRequirements: 'iFlow CLI 要求',
+		cliRequirementsDesc: '此插件需要安装并运行 iFlow CLI。安装命令: npm install -g @iflow-ai/iflow-cli@latest',
+		connectionStatus: '连接状态: ',
+		connected: '✓ 已连接',
+		disconnected: '✗ 未连接',
+		checking: '检测中...',
+		autoAttachFile: '自动附加当前文件',
+		autoAttachFileDesc: '当打开文件时自动将其作为上下文附加到对话中',
+	},
+
+	// Attachment context
+	attachment: {
+		removeFile: '移除附件',
+		noFileAttached: '无附加文件',
+		dropImageHere: '拖放图片到此处',
+		pasteImage: '或粘贴图片 (Ctrl+V)',
+		imageTooLarge: '图片大小超过限制 (最大 5MB)',
+		unsupportedImageType: '不支持的图片格式',
+	},
+
+	// Context indicator
+	context: {
+		file: '📄 ',
+		attached: '已附加: ',
 	},
 };
 

@@ -83,6 +83,10 @@ export interface SendMessageOptions {
 	model?: string;
 	mode?: string;
 	thinkingEnabled?: boolean;
+	images?: Array<{
+		mediaType: string;
+		data: string;  // base64
+	}>;
 	onChunk?: (chunk: string) => void;
 	onTool?: (tool: IFlowToolCall) => void;
 	onEnd?: () => void;
@@ -865,11 +869,34 @@ export class IFlowService {
 			cleanup();
 		});
 
+		// Build prompt content array
+		const promptContent: Array<{ type: string; text?: string; source?: { type: string; media_type: string; data: string } }> = [];
+		
+		// Add images first (if any)
+		if (options.images && options.images.length > 0) {
+			for (const image of options.images) {
+				promptContent.push({
+					type: 'image',
+					source: {
+						type: 'base64',
+						media_type: image.mediaType,
+						data: image.data,
+					},
+				});
+			}
+		}
+		
+		// Add text content
+		promptContent.push({
+			type: 'text',
+			text: prompt,
+		});
+
 		// Send prompt request
 		try {
 			const result = await this.protocol.sendRequest('session/prompt', {
 				sessionId: this.sessionId,
-				prompt: [{ type: 'text', text: prompt }],
+				prompt: promptContent,
 			});
 
 			// Check if the response indicates completion

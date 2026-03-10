@@ -84,15 +84,53 @@ export const enUS = {
 		assistant: 'iFlow',
 	},
 
-	// Context indicator
-	context: {
-		file: '📄 ',
-	},
-
 	// Errors
 	errors: {
 		streamingTimeout: 'Streaming timeout',
 		connectionFailed: 'Connection failed',
+	},
+
+	// Settings page
+	settings: {
+		title: 'iFlow for Obsidian Settings',
+		port: 'iFlow CLI WebSocket Port',
+		portDesc: 'The port number that iFlow CLI is listening on (default: 8090)',
+		timeout: 'Connection Timeout (ms)',
+		timeoutDesc: 'Timeout for connecting to iFlow CLI (default: 60000)',
+		autoScroll: 'Enable Auto Scroll',
+		autoScrollDesc: 'Automatically scroll to bottom during streaming responses',
+		excludedTags: 'Excluded Tags',
+		excludedTagsDesc: 'Notes with these tags will not be automatically attached to conversations (comma-separated)',
+		language: 'Interface Language',
+		languageDesc: 'Select the display language for the plugin interface',
+		languageOptions: {
+			'zh-CN': '中文简体',
+			'en-US': 'English',
+		},
+		cliRequirements: 'iFlow CLI Requirements',
+		cliRequirementsDesc: 'This plugin requires iFlow CLI to be installed and running. Install it with: npm install -g @iflow-ai/iflow-cli@latest',
+		connectionStatus: 'Connection Status: ',
+		connected: '✓ Connected',
+		disconnected: '✗ Disconnected',
+		checking: 'Checking...',
+		autoAttachFile: 'Auto Attach Current File',
+		autoAttachFileDesc: 'Automatically attach the current file as context when opening it',
+	},
+
+	// Attachment context
+	attachment: {
+		removeFile: 'Remove attachment',
+		noFileAttached: 'No file attached',
+		dropImageHere: 'Drop image here',
+		pasteImage: 'or paste image (Ctrl+V)',
+		imageTooLarge: 'Image exceeds size limit (max 5MB)',
+		unsupportedImageType: 'Unsupported image type',
+	},
+
+	// Context indicator
+	context: {
+		file: '📄 ',
+		attached: 'Attached: ',
 	},
 };
 

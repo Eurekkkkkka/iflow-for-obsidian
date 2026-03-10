@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, TFile, MarkdownView } from 'obsidian';
+import { ItemView, WorkspaceLeaf, TFile, MarkdownView, Notice } from 'obsidian';
 import IFlowPlugin from './main';
 import { IFlowService } from './iflowService';
 import { ConversationStore, type Conversation, type Message } from './conversationStore';
@@ -6,6 +6,27 @@ import type { IFlowSettings } from './main';
 import { initI18n, t, format } from './i18n';
 
 export const VIEW_TYPE_IFLOW_CHAT = 'iflow-chat-view';
+
+// Image attachment types
+export type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
+
+export interface ImageAttachment {
+	id: string;
+	name: string;
+	mediaType: ImageMediaType;
+	data: string;  // base64
+	size: number;
+	source: 'paste' | 'drop';
+}
+
+const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+const IMAGE_EXTENSIONS: Record<string, ImageMediaType> = {
+	'.jpg': 'image/jpeg',
+	'.jpeg': 'image/jpeg',
+	'.png': 'image/png',
+	'.gif': 'image/gif',
+	'.webp': 'image/webp',
+};
 
 export class IFlowChatView extends ItemView {
 	plugin: IFlowPlugin;
@@ -29,6 +50,20 @@ export class IFlowChatView extends ItemView {
 	private conversationTitleEl: HTMLElement | null = null;
 	private isLoadingMessages = false; // 防止在加载期间重复加载
 	private showConversationPanel = false; // Panel visibility state
+
+	// File attachment
+	private currentFile: TFile | null = null;
+	private attachedFile: TFile | null = null;  // Manually attached file
+
+	// Image attachments
+	private attachedImages: Map<string, ImageAttachment> = new Map();
+	private imagePreviewEl: HTMLElement | null = null;
+	private dropOverlay: HTMLElement | null = null;
+
+	// UI Components
+	private messagesContainer!: HTMLElement;
+	private textarea!: HTMLTextAreaElement;
+	private contextIndicator!: HTMLElement;
 
 	constructor(leaf: WorkspaceLeaf, plugin: IFlowPlugin, iflowService: IFlowService) {
 		super(leaf);
@@ -117,9 +152,19 @@ export class IFlowChatView extends ItemView {
 			}
 		});
 
-		// Add context indicator
-		const contextIndicator = chatContainer.createDiv({ cls: 'iflow-context-indicator' });
+		// Add context area (image preview + file indicator)
+		const contextArea = chatContainer.createDiv({ cls: 'iflow-context-area' });
+		
+		// Image preview area
+		this.imagePreviewEl = contextArea.createDiv({ cls: 'iflow-image-preview' });
+		this.imagePreviewEl.style.display = 'none';
+		
+		// File context indicator with remove button
+		const contextIndicator = contextArea.createDiv({ cls: 'iflow-context-indicator' });
 		this.contextIndicator = contextIndicator;
+
+		// Setup drag/drop for images
+		this.setupImageDropAndPaste(inputWrapper);
 
 		// Update context when active file changes
 		this.updateContext();
@@ -150,13 +195,271 @@ export class IFlowChatView extends ItemView {
 
 	private updateContext() {
 		const activeFile = this.plugin.getActiveFile();
-		if (activeFile) {
+		
+		// Only auto-attach if setting is enabled
+		if (this.plugin.settings.autoAttachFile) {
 			this.currentFile = activeFile;
-			this.contextIndicator.textContent = `📄 ${activeFile.path}`;
 		} else {
 			this.currentFile = null;
-			this.contextIndicator.textContent = '';
 		}
+		
+		this.renderContextIndicator();
+	}
+
+	private renderContextIndicator() {
+		this.contextIndicator.empty();
+		
+		const fileToShow = this.attachedFile || this.currentFile;
+		
+		if (fileToShow) {
+			const fileSpan = this.contextIndicator.createSpan({ cls: 'iflow-context-file' });
+			fileSpan.textContent = `${t().context.attached}${fileToShow.path}`;
+			
+			const removeBtn = this.contextIndicator.createSpan({ cls: 'iflow-context-remove', text: '×' });
+			removeBtn.onclick = () => {
+				this.attachedFile = null;
+				this.currentFile = null;
+				this.renderContextIndicator();
+			};
+		}
+	}
+
+	// ============================================
+	// Image Handling
+	// ============================================
+
+	private setupImageDropAndPaste(inputWrapper: HTMLElement) {
+		// Create drop overlay
+		this.dropOverlay = inputWrapper.createDiv({ cls: 'iflow-drop-overlay' });
+		const dropContent = this.dropOverlay.createDiv({ cls: 'iflow-drop-content' });
+		
+		// SVG icon
+		const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+		svg.setAttribute('viewBox', '0 0 24 24');
+		svg.setAttribute('width', '32');
+		svg.setAttribute('height', '32');
+		svg.setAttribute('fill', 'none');
+		svg.setAttribute('stroke', 'currentColor');
+		svg.setAttribute('stroke-width', '2');
+		svg.innerHTML = '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>';
+		dropContent.appendChild(svg);
+		dropContent.createSpan({ text: t().attachment.dropImageHere });
+
+		// Drag and drop events
+		inputWrapper.addEventListener('dragenter', (e) => this.handleDragEnter(e as DragEvent));
+		inputWrapper.addEventListener('dragover', (e) => this.handleDragOver(e as DragEvent));
+		inputWrapper.addEventListener('dragleave', (e) => this.handleDragLeave(e as DragEvent));
+		inputWrapper.addEventListener('drop', (e) => this.handleDrop(e as DragEvent));
+
+		// Paste handler
+		this.textarea.addEventListener('paste', async (e) => {
+			const items = e.clipboardData?.items;
+			if (!items) return;
+
+			for (let i = 0; i < items.length; i++) {
+				const item = items[i];
+				if (item.type.startsWith('image/')) {
+					e.preventDefault();
+					const file = item.getAsFile();
+					if (file) {
+						await this.addImageFromFile(file, 'paste');
+					}
+					return;
+				}
+			}
+		});
+	}
+
+	private handleDragEnter(e: DragEvent) {
+		e.preventDefault();
+		e.stopPropagation();
+		if (e.dataTransfer?.types.includes('Files')) {
+			this.dropOverlay?.addClass('visible');
+		}
+	}
+
+	private handleDragOver(e: DragEvent) {
+		e.preventDefault();
+		e.stopPropagation();
+	}
+
+	private handleDragLeave(e: DragEvent) {
+		e.preventDefault();
+		e.stopPropagation();
+		
+		const inputWrapper = this.containerEl.querySelector('.iflow-input-wrapper');
+		if (!inputWrapper) {
+			this.dropOverlay?.removeClass('visible');
+			return;
+		}
+
+		const rect = inputWrapper.getBoundingClientRect();
+		if (
+			e.clientX <= rect.left ||
+			e.clientX >= rect.right ||
+			e.clientY <= rect.top ||
+			e.clientY >= rect.bottom
+		) {
+			this.dropOverlay?.removeClass('visible');
+		}
+	}
+
+	private async handleDrop(e: DragEvent) {
+		e.preventDefault();
+		e.stopPropagation();
+		this.dropOverlay?.removeClass('visible');
+
+		const files = e.dataTransfer?.files;
+		if (!files) return;
+
+		for (let i = 0; i < files.length; i++) {
+			const file = files[i];
+			if (this.isImageFile(file)) {
+				await this.addImageFromFile(file, 'drop');
+			}
+		}
+	}
+
+	private isImageFile(file: File): boolean {
+		return file.type.startsWith('image/') && this.getMediaType(file.name) !== null;
+	}
+
+	private getMediaType(filename: string): ImageMediaType | null {
+		const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
+		return IMAGE_EXTENSIONS[ext] || null;
+	}
+
+	private async addImageFromFile(file: File, source: 'paste' | 'drop'): Promise<boolean> {
+		if (file.size > MAX_IMAGE_SIZE) {
+			new Notice(t().attachment.imageTooLarge);
+			return false;
+		}
+
+		const mediaType = this.getMediaType(file.name) || (file.type as ImageMediaType);
+		if (!mediaType) {
+			new Notice(t().attachment.unsupportedImageType);
+			return false;
+		}
+
+		try {
+			const base64 = await this.fileToBase64(file);
+
+			const attachment: ImageAttachment = {
+				id: this.generateImageId(),
+				name: file.name || `image-${Date.now()}.${mediaType.split('/')[1]}`,
+				mediaType,
+				data: base64,
+				size: file.size,
+				source,
+			};
+
+			this.attachedImages.set(attachment.id, attachment);
+			this.updateImagePreview();
+			return true;
+		} catch (error) {
+			console.error('[iFlow] Failed to attach image:', error);
+			return false;
+		}
+	}
+
+	private async fileToBase64(file: File): Promise<string> {
+		return new Promise((resolve, reject) => {
+			const reader = new FileReader();
+			reader.onload = () => {
+				const result = reader.result as string;
+				const base64 = result.split(',')[1];
+				resolve(base64);
+			};
+			reader.onerror = reject;
+			reader.readAsDataURL(file);
+		});
+	}
+
+	private generateImageId(): string {
+		return `img-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+	}
+
+	private updateImagePreview() {
+		if (!this.imagePreviewEl) return;
+		
+		this.imagePreviewEl.empty();
+
+		if (this.attachedImages.size === 0) {
+			this.imagePreviewEl.style.display = 'none';
+			return;
+		}
+
+		this.imagePreviewEl.style.display = 'flex';
+
+		for (const [id, image] of this.attachedImages) {
+			this.renderImagePreview(id, image);
+		}
+	}
+
+	private renderImagePreview(id: string, image: ImageAttachment) {
+		const chip = this.imagePreviewEl!.createDiv({ cls: 'iflow-image-chip' });
+
+		const thumb = chip.createDiv({ cls: 'iflow-image-thumb' });
+		thumb.createEl('img', {
+			attr: {
+				src: `data:${image.mediaType};base64,${image.data}`,
+				alt: image.name,
+			},
+		});
+
+		const info = chip.createDiv({ cls: 'iflow-image-info' });
+		info.createSpan({ cls: 'iflow-image-name', text: this.truncateName(image.name, 15) });
+		info.createSpan({ cls: 'iflow-image-size', text: this.formatSize(image.size) });
+
+		const remove = chip.createSpan({ cls: 'iflow-image-remove', text: '×' });
+		remove.onclick = () => {
+			this.attachedImages.delete(id);
+			this.updateImagePreview();
+		};
+
+		thumb.onclick = () => this.showFullImage(image);
+	}
+
+	private showFullImage(image: ImageAttachment) {
+		const overlay = document.body.createDiv({ cls: 'iflow-image-modal-overlay' });
+		const modal = overlay.createDiv({ cls: 'iflow-image-modal' });
+
+		modal.createEl('img', {
+			attr: {
+				src: `data:${image.mediaType};base64,${image.data}`,
+				alt: image.name,
+			},
+		});
+
+		const closeBtn = modal.createDiv({ cls: 'iflow-image-modal-close', text: '×' });
+
+		const handleEsc = (e: KeyboardEvent) => {
+			if (e.key === 'Escape') close();
+		};
+
+		const close = () => {
+			document.removeEventListener('keydown', handleEsc);
+			overlay.remove();
+		};
+
+		closeBtn.onclick = close;
+		overlay.onclick = (e) => {
+			if (e.target === overlay) close();
+		};
+		document.addEventListener('keydown', handleEsc);
+	}
+
+	private truncateName(name: string, maxLen: number): string {
+		if (name.length <= maxLen) return name;
+		const ext = name.substring(name.lastIndexOf('.'));
+		const base = name.substring(0, name.length - ext.length);
+		return `${base.substring(0, maxLen - ext.length - 3)}...${ext}`;
+	}
+
+	private formatSize(bytes: number): string {
+		if (bytes < 1024) return `${bytes} B`;
+		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+		return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 	}
 
 	private streamingTimeout: NodeJS.Timeout | null = null;
@@ -219,6 +522,10 @@ export class IFlowChatView extends ItemView {
 		// Add user message to UI
 		const userMsgId = this.addMessage('user', content);
 		this.textarea.value = '';
+
+		// Clear attached images after sending
+		this.attachedImages.clear();
+		this.updateImagePreview();
 
 		// Add user message to conversation
 		if (this.currentConversationId) {
@@ -975,10 +1282,4 @@ export class IFlowChatView extends ItemView {
 		// Rebuild mode selector UI
 		// TODO: Implement UI refresh
 	}
-
-	// Properties for type safety
-	private messagesContainer: HTMLElement;
-	private textarea: HTMLTextAreaElement;
-	private contextIndicator: HTMLElement;
-	private currentFile: TFile | null = null;
 }

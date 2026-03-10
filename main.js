@@ -670,10 +670,27 @@ ${options.selection}
       (_a = options.onError) == null ? void 0 : _a.call(options, "Connection error");
       cleanup();
     });
+    const promptContent = [];
+    if (options.images && options.images.length > 0) {
+      for (const image of options.images) {
+        promptContent.push({
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: image.mediaType,
+            data: image.data
+          }
+        });
+      }
+    }
+    promptContent.push({
+      type: "text",
+      text: prompt
+    });
     try {
       const result = await this.protocol.sendRequest("session/prompt", {
         sessionId: this.sessionId,
-        prompt: [{ type: "text", text: prompt }]
+        prompt: promptContent
       });
       if ((result == null ? void 0 : result.stopReason) === "end_turn" || (result == null ? void 0 : result.stopReason) === "max_turns") {
         console.log("[iFlow] Prompt completed with stopReason:", result.stopReason);
@@ -1166,14 +1183,50 @@ var zhCN = {
     user: "\u4F60",
     assistant: "iFlow"
   },
-  // Context indicator
-  context: {
-    file: "\u{1F4C4} "
-  },
   // Errors
   errors: {
     streamingTimeout: "\u6D41\u5F0F\u4F20\u8F93\u8D85\u65F6",
     connectionFailed: "\u8FDE\u63A5\u5931\u8D25"
+  },
+  // Settings page
+  settings: {
+    title: "iFlow for Obsidian \u8BBE\u7F6E",
+    port: "iFlow CLI WebSocket \u7AEF\u53E3",
+    portDesc: "iFlow CLI \u76D1\u542C\u7684\u7AEF\u53E3\u53F7 (\u9ED8\u8BA4: 8090)",
+    timeout: "\u8FDE\u63A5\u8D85\u65F6 (\u6BEB\u79D2)",
+    timeoutDesc: "\u8FDE\u63A5 iFlow CLI \u7684\u8D85\u65F6\u65F6\u95F4 (\u9ED8\u8BA4: 60000)",
+    autoScroll: "\u542F\u7528\u81EA\u52A8\u6EDA\u52A8",
+    autoScrollDesc: "\u5728\u6D41\u5F0F\u54CD\u5E94\u671F\u95F4\u81EA\u52A8\u6EDA\u52A8\u5230\u5E95\u90E8",
+    excludedTags: "\u6392\u9664\u6807\u7B7E",
+    excludedTagsDesc: "\u5E26\u6709\u8FD9\u4E9B\u6807\u7B7E\u7684\u7B14\u8BB0\u4E0D\u4F1A\u81EA\u52A8\u9644\u52A0\u5230\u5BF9\u8BDD\u4E2D (\u7528\u9017\u53F7\u5206\u9694)",
+    language: "\u754C\u9762\u8BED\u8A00",
+    languageDesc: "\u9009\u62E9\u63D2\u4EF6\u754C\u9762\u7684\u663E\u793A\u8BED\u8A00",
+    languageOptions: {
+      "zh-CN": "\u4E2D\u6587\u7B80\u4F53",
+      "en-US": "English"
+    },
+    cliRequirements: "iFlow CLI \u8981\u6C42",
+    cliRequirementsDesc: "\u6B64\u63D2\u4EF6\u9700\u8981\u5B89\u88C5\u5E76\u8FD0\u884C iFlow CLI\u3002\u5B89\u88C5\u547D\u4EE4: npm install -g @iflow-ai/iflow-cli@latest",
+    connectionStatus: "\u8FDE\u63A5\u72B6\u6001: ",
+    connected: "\u2713 \u5DF2\u8FDE\u63A5",
+    disconnected: "\u2717 \u672A\u8FDE\u63A5",
+    checking: "\u68C0\u6D4B\u4E2D...",
+    autoAttachFile: "\u81EA\u52A8\u9644\u52A0\u5F53\u524D\u6587\u4EF6",
+    autoAttachFileDesc: "\u5F53\u6253\u5F00\u6587\u4EF6\u65F6\u81EA\u52A8\u5C06\u5176\u4F5C\u4E3A\u4E0A\u4E0B\u6587\u9644\u52A0\u5230\u5BF9\u8BDD\u4E2D"
+  },
+  // Attachment context
+  attachment: {
+    removeFile: "\u79FB\u9664\u9644\u4EF6",
+    noFileAttached: "\u65E0\u9644\u52A0\u6587\u4EF6",
+    dropImageHere: "\u62D6\u653E\u56FE\u7247\u5230\u6B64\u5904",
+    pasteImage: "\u6216\u7C98\u8D34\u56FE\u7247 (Ctrl+V)",
+    imageTooLarge: "\u56FE\u7247\u5927\u5C0F\u8D85\u8FC7\u9650\u5236 (\u6700\u5927 5MB)",
+    unsupportedImageType: "\u4E0D\u652F\u6301\u7684\u56FE\u7247\u683C\u5F0F"
+  },
+  // Context indicator
+  context: {
+    file: "\u{1F4C4} ",
+    attached: "\u5DF2\u9644\u52A0: "
   }
 };
 
@@ -1254,14 +1307,50 @@ var enUS = {
     user: "You",
     assistant: "iFlow"
   },
-  // Context indicator
-  context: {
-    file: "\u{1F4C4} "
-  },
   // Errors
   errors: {
     streamingTimeout: "Streaming timeout",
     connectionFailed: "Connection failed"
+  },
+  // Settings page
+  settings: {
+    title: "iFlow for Obsidian Settings",
+    port: "iFlow CLI WebSocket Port",
+    portDesc: "The port number that iFlow CLI is listening on (default: 8090)",
+    timeout: "Connection Timeout (ms)",
+    timeoutDesc: "Timeout for connecting to iFlow CLI (default: 60000)",
+    autoScroll: "Enable Auto Scroll",
+    autoScrollDesc: "Automatically scroll to bottom during streaming responses",
+    excludedTags: "Excluded Tags",
+    excludedTagsDesc: "Notes with these tags will not be automatically attached to conversations (comma-separated)",
+    language: "Interface Language",
+    languageDesc: "Select the display language for the plugin interface",
+    languageOptions: {
+      "zh-CN": "\u4E2D\u6587\u7B80\u4F53",
+      "en-US": "English"
+    },
+    cliRequirements: "iFlow CLI Requirements",
+    cliRequirementsDesc: "This plugin requires iFlow CLI to be installed and running. Install it with: npm install -g @iflow-ai/iflow-cli@latest",
+    connectionStatus: "Connection Status: ",
+    connected: "\u2713 Connected",
+    disconnected: "\u2717 Disconnected",
+    checking: "Checking...",
+    autoAttachFile: "Auto Attach Current File",
+    autoAttachFileDesc: "Automatically attach the current file as context when opening it"
+  },
+  // Attachment context
+  attachment: {
+    removeFile: "Remove attachment",
+    noFileAttached: "No file attached",
+    dropImageHere: "Drop image here",
+    pasteImage: "or paste image (Ctrl+V)",
+    imageTooLarge: "Image exceeds size limit (max 5MB)",
+    unsupportedImageType: "Unsupported image type"
+  },
+  // Context indicator
+  context: {
+    file: "\u{1F4C4} ",
+    attached: "Attached: "
   }
 };
 
@@ -1275,6 +1364,7 @@ var languages = {
   // alias for en-US
 };
 var currentLang = zhCN;
+var currentLangCode = "zh-CN";
 function detectLanguage() {
   var _a;
   if (typeof window !== "undefined" && ((_a = window.obsidian) == null ? void 0 : _a.locale)) {
@@ -1290,14 +1380,25 @@ function initI18n(langCode) {
   const code = langCode || detectLanguage();
   if (languages[code]) {
     currentLang = languages[code];
+    currentLangCode = code;
     return;
   }
   const baseLang = code.split("-")[0];
   if (languages[baseLang]) {
     currentLang = languages[baseLang];
+    currentLangCode = baseLang;
     return;
   }
   currentLang = zhCN;
+  currentLangCode = "zh-CN";
+}
+function setLanguage(langCode) {
+  if (languages[langCode]) {
+    currentLang = languages[langCode];
+    currentLangCode = langCode;
+    return true;
+  }
+  return false;
 }
 function t() {
   return currentLang;
@@ -1311,8 +1412,15 @@ function format(template, vars) {
 
 // src/chatView.ts
 var VIEW_TYPE_IFLOW_CHAT = "iflow-chat-view";
+var MAX_IMAGE_SIZE = 5 * 1024 * 1024;
+var IMAGE_EXTENSIONS = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".gif": "image/gif",
+  ".webp": "image/webp"
+};
 var IFlowChatView = class extends import_obsidian2.ItemView {
-  // Panel visibility state
   constructor(leaf, plugin, iflowService) {
     super(leaf);
     this.messages = [];
@@ -1331,8 +1439,16 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     this.isLoadingMessages = false;
     // 防止在加载期间重复加载
     this.showConversationPanel = false;
-    this.streamingTimeout = null;
+    // Panel visibility state
+    // File attachment
     this.currentFile = null;
+    this.attachedFile = null;
+    // Manually attached file
+    // Image attachments
+    this.attachedImages = /* @__PURE__ */ new Map();
+    this.imagePreviewEl = null;
+    this.dropOverlay = null;
+    this.streamingTimeout = null;
     this.plugin = plugin;
     this.iflowService = iflowService;
     initI18n();
@@ -1384,8 +1500,12 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
         this.sendMessage();
       }
     });
-    const contextIndicator = chatContainer.createDiv({ cls: "iflow-context-indicator" });
+    const contextArea = chatContainer.createDiv({ cls: "iflow-context-area" });
+    this.imagePreviewEl = contextArea.createDiv({ cls: "iflow-image-preview" });
+    this.imagePreviewEl.style.display = "none";
+    const contextIndicator = contextArea.createDiv({ cls: "iflow-context-indicator" });
     this.contextIndicator = contextIndicator;
+    this.setupImageDropAndPaste(inputWrapper);
     this.updateContext();
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => this.updateContext())
@@ -1405,13 +1525,218 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
   }
   updateContext() {
     const activeFile = this.plugin.getActiveFile();
-    if (activeFile) {
+    if (this.plugin.settings.autoAttachFile) {
       this.currentFile = activeFile;
-      this.contextIndicator.textContent = `\u{1F4C4} ${activeFile.path}`;
     } else {
       this.currentFile = null;
-      this.contextIndicator.textContent = "";
     }
+    this.renderContextIndicator();
+  }
+  renderContextIndicator() {
+    this.contextIndicator.empty();
+    const fileToShow = this.attachedFile || this.currentFile;
+    if (fileToShow) {
+      const fileSpan = this.contextIndicator.createSpan({ cls: "iflow-context-file" });
+      fileSpan.textContent = `${t().context.attached}${fileToShow.path}`;
+      const removeBtn = this.contextIndicator.createSpan({ cls: "iflow-context-remove", text: "\xD7" });
+      removeBtn.onclick = () => {
+        this.attachedFile = null;
+        this.currentFile = null;
+        this.renderContextIndicator();
+      };
+    }
+  }
+  // ============================================
+  // Image Handling
+  // ============================================
+  setupImageDropAndPaste(inputWrapper) {
+    this.dropOverlay = inputWrapper.createDiv({ cls: "iflow-drop-overlay" });
+    const dropContent = this.dropOverlay.createDiv({ cls: "iflow-drop-content" });
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("width", "32");
+    svg.setAttribute("height", "32");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2");
+    svg.innerHTML = '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>';
+    dropContent.appendChild(svg);
+    dropContent.createSpan({ text: t().attachment.dropImageHere });
+    inputWrapper.addEventListener("dragenter", (e) => this.handleDragEnter(e));
+    inputWrapper.addEventListener("dragover", (e) => this.handleDragOver(e));
+    inputWrapper.addEventListener("dragleave", (e) => this.handleDragLeave(e));
+    inputWrapper.addEventListener("drop", (e) => this.handleDrop(e));
+    this.textarea.addEventListener("paste", async (e) => {
+      var _a;
+      const items = (_a = e.clipboardData) == null ? void 0 : _a.items;
+      if (!items) return;
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.type.startsWith("image/")) {
+          e.preventDefault();
+          const file = item.getAsFile();
+          if (file) {
+            await this.addImageFromFile(file, "paste");
+          }
+          return;
+        }
+      }
+    });
+  }
+  handleDragEnter(e) {
+    var _a, _b;
+    e.preventDefault();
+    e.stopPropagation();
+    if ((_a = e.dataTransfer) == null ? void 0 : _a.types.includes("Files")) {
+      (_b = this.dropOverlay) == null ? void 0 : _b.addClass("visible");
+    }
+  }
+  handleDragOver(e) {
+    e.preventDefault();
+    e.stopPropagation();
+  }
+  handleDragLeave(e) {
+    var _a, _b;
+    e.preventDefault();
+    e.stopPropagation();
+    const inputWrapper = this.containerEl.querySelector(".iflow-input-wrapper");
+    if (!inputWrapper) {
+      (_a = this.dropOverlay) == null ? void 0 : _a.removeClass("visible");
+      return;
+    }
+    const rect = inputWrapper.getBoundingClientRect();
+    if (e.clientX <= rect.left || e.clientX >= rect.right || e.clientY <= rect.top || e.clientY >= rect.bottom) {
+      (_b = this.dropOverlay) == null ? void 0 : _b.removeClass("visible");
+    }
+  }
+  async handleDrop(e) {
+    var _a, _b;
+    e.preventDefault();
+    e.stopPropagation();
+    (_a = this.dropOverlay) == null ? void 0 : _a.removeClass("visible");
+    const files = (_b = e.dataTransfer) == null ? void 0 : _b.files;
+    if (!files) return;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (this.isImageFile(file)) {
+        await this.addImageFromFile(file, "drop");
+      }
+    }
+  }
+  isImageFile(file) {
+    return file.type.startsWith("image/") && this.getMediaType(file.name) !== null;
+  }
+  getMediaType(filename) {
+    const ext = filename.toLowerCase().substring(filename.lastIndexOf("."));
+    return IMAGE_EXTENSIONS[ext] || null;
+  }
+  async addImageFromFile(file, source) {
+    if (file.size > MAX_IMAGE_SIZE) {
+      new import_obsidian2.Notice(t().attachment.imageTooLarge);
+      return false;
+    }
+    const mediaType = this.getMediaType(file.name) || file.type;
+    if (!mediaType) {
+      new import_obsidian2.Notice(t().attachment.unsupportedImageType);
+      return false;
+    }
+    try {
+      const base64 = await this.fileToBase64(file);
+      const attachment = {
+        id: this.generateImageId(),
+        name: file.name || `image-${Date.now()}.${mediaType.split("/")[1]}`,
+        mediaType,
+        data: base64,
+        size: file.size,
+        source
+      };
+      this.attachedImages.set(attachment.id, attachment);
+      this.updateImagePreview();
+      return true;
+    } catch (error) {
+      console.error("[iFlow] Failed to attach image:", error);
+      return false;
+    }
+  }
+  async fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result;
+        const base64 = result.split(",")[1];
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+  generateImageId() {
+    return `img-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+  }
+  updateImagePreview() {
+    if (!this.imagePreviewEl) return;
+    this.imagePreviewEl.empty();
+    if (this.attachedImages.size === 0) {
+      this.imagePreviewEl.style.display = "none";
+      return;
+    }
+    this.imagePreviewEl.style.display = "flex";
+    for (const [id, image] of this.attachedImages) {
+      this.renderImagePreview(id, image);
+    }
+  }
+  renderImagePreview(id, image) {
+    const chip = this.imagePreviewEl.createDiv({ cls: "iflow-image-chip" });
+    const thumb = chip.createDiv({ cls: "iflow-image-thumb" });
+    thumb.createEl("img", {
+      attr: {
+        src: `data:${image.mediaType};base64,${image.data}`,
+        alt: image.name
+      }
+    });
+    const info = chip.createDiv({ cls: "iflow-image-info" });
+    info.createSpan({ cls: "iflow-image-name", text: this.truncateName(image.name, 15) });
+    info.createSpan({ cls: "iflow-image-size", text: this.formatSize(image.size) });
+    const remove = chip.createSpan({ cls: "iflow-image-remove", text: "\xD7" });
+    remove.onclick = () => {
+      this.attachedImages.delete(id);
+      this.updateImagePreview();
+    };
+    thumb.onclick = () => this.showFullImage(image);
+  }
+  showFullImage(image) {
+    const overlay = document.body.createDiv({ cls: "iflow-image-modal-overlay" });
+    const modal = overlay.createDiv({ cls: "iflow-image-modal" });
+    modal.createEl("img", {
+      attr: {
+        src: `data:${image.mediaType};base64,${image.data}`,
+        alt: image.name
+      }
+    });
+    const closeBtn = modal.createDiv({ cls: "iflow-image-modal-close", text: "\xD7" });
+    const handleEsc = (e) => {
+      if (e.key === "Escape") close();
+    };
+    const close = () => {
+      document.removeEventListener("keydown", handleEsc);
+      overlay.remove();
+    };
+    closeBtn.onclick = close;
+    overlay.onclick = (e) => {
+      if (e.target === overlay) close();
+    };
+    document.addEventListener("keydown", handleEsc);
+  }
+  truncateName(name, maxLen) {
+    if (name.length <= maxLen) return name;
+    const ext = name.substring(name.lastIndexOf("."));
+    const base = name.substring(0, name.length - ext.length);
+    return `${base.substring(0, maxLen - ext.length - 3)}...${ext}`;
+  }
+  formatSize(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   }
   async sendMessage() {
     var _a;
@@ -1456,6 +1781,8 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     }
     const userMsgId = this.addMessage("user", content);
     this.textarea.value = "";
+    this.attachedImages.clear();
+    this.updateImagePreview();
     if (this.currentConversationId) {
       this.conversationStore.addUserMessage(this.currentConversationId, content);
     }
@@ -2011,7 +2338,9 @@ var DEFAULT_SETTINGS = {
   iflowPort: 8090,
   iflowTimeout: 6e4,
   enableAutoScroll: true,
-  excludedTags: ["private", "sensitive"]
+  excludedTags: ["private", "sensitive"],
+  language: "zh-CN",
+  autoAttachFile: true
 };
 var IFlowPlugin = class extends import_obsidian3.Plugin {
   constructor() {
@@ -2021,6 +2350,7 @@ var IFlowPlugin = class extends import_obsidian3.Plugin {
   async onload() {
     console.log("Loading iFlow for Obsidian plugin");
     await this.loadSettings();
+    initI18n(this.settings.language);
     this.iflowService = new IFlowService(this.settings.iflowPort, this.settings.iflowTimeout, this.app);
     this.registerView(
       VIEW_TYPE_IFLOW_CHAT,
@@ -2093,38 +2423,49 @@ var IFlowSettingTab = class extends import_obsidian3.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    new import_obsidian3.Setting(containerEl).setName("iFlow CLI WebSocket Port").setDesc("The port number that iFlow CLI is listening on (default: 8090)").addText((text) => text.setValue(String(this.plugin.settings.iflowPort)).onChange(async (value) => {
+    const settings = t().settings;
+    new import_obsidian3.Setting(containerEl).setName(settings.language).setDesc(settings.languageDesc).addDropdown((dropdown) => dropdown.addOption("zh-CN", "\u4E2D\u6587\u7B80\u4F53").addOption("en-US", "English").setValue(this.plugin.settings.language).onChange(async (value) => {
+      this.plugin.settings.language = value;
+      await this.plugin.saveSettings();
+      setLanguage(value);
+      this.display();
+    }));
+    new import_obsidian3.Setting(containerEl).setName(settings.port).setDesc(settings.portDesc).addText((text) => text.setValue(String(this.plugin.settings.iflowPort)).onChange(async (value) => {
       const port = parseInt(value);
       if (!isNaN(port) && port > 0 && port < 65536) {
         this.plugin.settings.iflowPort = port;
         await this.plugin.saveSettings();
       }
     }));
-    new import_obsidian3.Setting(containerEl).setName("Connection Timeout (ms)").setDesc("Timeout for connecting to iFlow CLI (default: 60000)").addText((text) => text.setValue(String(this.plugin.settings.iflowTimeout)).onChange(async (value) => {
+    new import_obsidian3.Setting(containerEl).setName(settings.timeout).setDesc(settings.timeoutDesc).addText((text) => text.setValue(String(this.plugin.settings.iflowTimeout)).onChange(async (value) => {
       const timeout = parseInt(value);
       if (!isNaN(timeout) && timeout > 0) {
         this.plugin.settings.iflowTimeout = timeout;
         await this.plugin.saveSettings();
       }
     }));
-    new import_obsidian3.Setting(containerEl).setName("Enable Auto Scroll").setDesc("Automatically scroll to bottom during streaming responses").addToggle((toggle) => toggle.setValue(this.plugin.settings.enableAutoScroll).onChange(async (value) => {
+    new import_obsidian3.Setting(containerEl).setName(settings.autoScroll).setDesc(settings.autoScrollDesc).addToggle((toggle) => toggle.setValue(this.plugin.settings.enableAutoScroll).onChange(async (value) => {
       this.plugin.settings.enableAutoScroll = value;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian3.Setting(containerEl).setName("Excluded Tags").setDesc("Notes with these tags will not be automatically attached to conversations (comma-separated)").addText((text) => text.setValue(this.plugin.settings.excludedTags.join(", ")).onChange(async (value) => {
+    new import_obsidian3.Setting(containerEl).setName(settings.autoAttachFile).setDesc(settings.autoAttachFileDesc).addToggle((toggle) => toggle.setValue(this.plugin.settings.autoAttachFile).onChange(async (value) => {
+      this.plugin.settings.autoAttachFile = value;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian3.Setting(containerEl).setName(settings.excludedTags).setDesc(settings.excludedTagsDesc).addText((text) => text.setValue(this.plugin.settings.excludedTags.join(", ")).onChange(async (value) => {
       this.plugin.settings.excludedTags = value.split(",").map((tag) => tag.trim()).filter((tag) => tag.length > 0);
       await this.plugin.saveSettings();
     }));
-    containerEl.createEl("h3", { text: "iFlow CLI Requirements" });
+    containerEl.createEl("h3", { text: settings.cliRequirements });
     containerEl.createEl("p", {
-      text: "This plugin requires iFlow CLI to be installed and running. Install it with: npm install -g @iflow-ai/iflow-cli@latest"
+      text: settings.cliRequirementsDesc
     });
     const statusDiv = containerEl.createEl("div", { cls: "iflow-status" });
-    statusDiv.createEl("p", { text: "Connection Status: " });
+    statusDiv.createEl("p", { text: settings.connectionStatus });
     const statusText = statusDiv.createEl("span", { cls: "iflow-status-text" });
-    statusText.textContent = "Checking...";
+    statusText.textContent = settings.checking;
     this.plugin.iflowService.checkConnection().then((connected) => {
-      statusText.textContent = connected ? "\u2713 Connected" : "\u2717 Disconnected";
+      statusText.textContent = connected ? settings.connected : settings.disconnected;
       statusText.className = "iflow-status-text " + (connected ? "connected" : "disconnected");
     });
   }
