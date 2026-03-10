@@ -789,6 +789,244 @@ this.protocol.onServerMethod('fs/write_text_file', async (_id: number, params: a
 
 **Key insight**: iFlow CLI doesn't have obsidian-skills like Claude Code CLI, so Canvas format guidance must be provided at the plugin level through intelligent prompt injection.
 
+## Tool Call Visualization
+
+### Overview
+
+Tool call visualization provides real-time feedback when AI executes tools, making the agent's actions transparent to the user. This is critical for user trust and debugging.
+
+### IFlowToolCall Interface
+
+```typescript
+// Tool call state tracking (iflowService.ts lines 69-76)
+export interface IFlowToolCall {
+    id: string;                    // Unique tool call ID
+    name: string;                  // Tool name (e.g., fs/write_text_file)
+    input: any;                    // Tool parameters
+    status?: 'running' | 'completed' | 'error';
+    result?: any;                  // Tool result (when completed)
+    error?: string;                // Error message (when failed)
+}
+```
+
+### Tool Call Detection
+
+iFlow CLI sends tool calls through `session/update` notifications:
+
+```typescript
+// Tool use detection (iflowService.ts lines 586-598)
+if (content.type === 'tool_use') {
+    console.log('[iFlow] Tool use detected:', content.name);
+    this.messageHandlers.forEach(handler => handler({
+        type: 'tool',
+        data: {
+            id: content.id || content.tool_use_id || Date.now().toString(),
+            name: content.name,
+            input: content.input || content.arguments,
+            status: 'running',
+        } as IFlowToolCall,
+    }));
+}
+
+// Tool result detection (iflowService.ts lines 599-613)
+else if (content.type === 'tool_result') {
+    console.log('[iFlow] Tool result:', content.tool_use_id);
+    this.messageHandlers.forEach(handler => handler({
+        type: 'tool',
+        data: {
+            id: content.tool_use_id || content.id,
+            name: content.tool_name || 'unknown',
+            input: {},
+            status: content.error ? 'error' : 'completed',
+            result: content.result || content.content,
+            error: content.error,
+        } as IFlowToolCall,
+    }));
+}
+```
+
+### UI Implementation
+
+Tool call visualization creates interactive cards showing tool execution:
+
+```typescript
+// Tool call display (chatView.ts lines 348-420)
+private showOrUpdateToolCall(messageId: string, tool: IFlowToolCall): void {
+    // Find or create tool call container
+    let toolContainer = contentEl.querySelector(`.iflow-tool-call[data-tool-id="${tool.id}"]`);
+
+    if (!toolContainer) {
+        // Create new tool call element with status
+        toolContainer = contentEl.createDiv({
+            cls: `iflow-tool-call iflow-tool-status-${tool.status || 'running'}`,
+        });
+        (toolContainer as any).dataset.toolId = tool.id;
+
+        // Status icon: 🔄 running / ✅ completed / ❌ error
+        const statusIcon = tool.status === 'completed' ? '✅' :
+                           tool.status === 'error' ? '❌' : '🔄';
+
+        header.createSpan({ cls: 'iflow-tool-icon', text: statusIcon });
+        header.createSpan({ cls: 'iflow-tool-name', text: tool.name });
+
+        // Display parameters in formatted code block
+        if (tool.input && Object.keys(tool.input).length > 0) {
+            const inputPre = details.createEl('pre', { cls: 'iflow-tool-input' });
+            inputPre.createEl('code', { text: JSON.stringify(tool.input, null, 2) });
+        }
+    } else {
+        // Update existing tool call status
+        toolContainer.className = `iflow-tool-call iflow-tool-status-${tool.status || 'running'}`;
+
+        // Update icon based on status
+        if (iconEl) {
+            iconEl.textContent = tool.status === 'completed' ? '✅' :
+                                tool.status === 'error' ? '❌' : '🔄';
+        }
+
+        // Add result when completed
+        if (tool.status === 'completed' && tool.result) {
+            resultEl = details.createEl('pre', { cls: 'iflow-tool-result' });
+            const resultText = typeof tool.result === 'string'
+                ? tool.result
+                : JSON.stringify(tool.result, null, 2);
+            resultEl.createEl('code', { text: resultText });
+        }
+
+        // Add error when failed
+        if (tool.status === 'error' && tool.error) {
+            errorEl = details.createDiv({ cls: 'iflow-tool-error' });
+            errorEl.createSpan({ text: `❌ 错误: ${tool.error}` });
+        }
+    }
+}
+```
+
+### CSS Styling
+
+Tool calls have visual status indicators:
+
+```css
+/* Tool call card (styles.css lines 1002-1101) */
+.iflow-tool-call {
+    margin: 12px 0;
+    padding: 12px;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 6px;
+}
+
+/* Status indicators via left border */
+.iflow-tool-status-running {
+    border-left: 3px solid var(--iflow-warn);  /* Yellow = running */
+}
+
+.iflow-tool-status-completed {
+    border-left: 3px solid var(--iflow-success);  /* Green = success */
+}
+
+.iflow-tool-status-error {
+    border-left: 3px solid var(--iflow-error);  /* Red = error */
+}
+
+/* Pulsing animation for running tools */
+.iflow-tool-status-running .iflow-tool-icon {
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+```
+
+### Tool Call Lifecycle
+
+```
+1. User sends message → AI decides to use tool
+   ↓
+2. iFlow CLI sends: { type: 'tool_use', name: 'fs/write_text_file', input: {...} }
+   ↓
+3. Plugin creates UI: 🔄 fs/write_text_file (with parameters)
+   ↓
+4. Tool executes in iFlow CLI
+   ↓
+5. iFlow CLI sends: { type: 'tool_result', tool_use_id: 'xxx', result: null }
+   ↓
+6. Plugin updates UI: ✅ fs/write_text_file (with result)
+```
+
+### Integration with Message Flow
+
+Tool calls are embedded within assistant messages:
+
+```typescript
+// Message structure
+private sendMessage() {
+    const assistantMsgId = this.addMessage('assistant', '');
+
+    await this.iflowService.sendMessage({
+        onChunk: (chunk: string) => {
+            // Stream text content
+            this.currentMessage += chunk;
+            this.updateMessage(assistantMsgId, this.currentMessage);
+        },
+        onTool: (tool: IFlowToolCall) => {
+            // Show/update tool call within same message
+            this.showOrUpdateToolCall(assistantMsgId, tool);
+        },
+        onEnd: () => {
+            // Save complete message with tool calls
+            this.conversationStore.addAssistantMessage(id, this.currentMessage);
+        },
+    });
+}
+```
+
+### Comparison with Claudian
+
+| Feature | iFlow v0.7.0 | Claudian |
+|---------|-------------|----------|
+| **Tool detection** | ✅ `tool_use` / `tool_result` | ✅ `tool_use` / `tool_result` |
+| **Status tracking** | ✅ running/completed/error | ✅ running/completed/error |
+| **UI rendering** | ✅ Cards with icons | ✅ Expandable cards |
+| **Parameter display** | ✅ JSON formatted | ✅ JSON formatted |
+| **Result display** | ✅ JSON formatted | ✅ Formatted |
+| **Error display** | ✅ Error messages | ✅ Error messages |
+| **Animations** | ✅ Pulse for running | ✅ Progress indicators |
+| **Buffering** | ❌ Immediate render | ✅ Batch rendering |
+
+**Key difference**: Claudian buffers tool calls and renders them in batches for better performance, while iFlow renders immediately for simplicity.
+
+### Debugging Tool Calls
+
+Enable detailed logging to see tool call flow:
+
+```typescript
+// In iflowService.ts
+console.log('[iFlow] Tool use detected:', content.name);
+console.log('[iFlow] Tool result:', content.tool_use_id);
+
+// In chatView.ts
+console.log('[iFlow Chat] Tool call:', tool);
+```
+
+Filter browser console for `[iFlow]` to see tool call events.
+
+### Common Issues
+
+**Issue**: Tool calls not visible
+- **Cause**: iFlow CLI not sending `tool_use` notifications
+- **Fix**: Check iFlow CLI version and configuration
+
+**Issue**: Tool stuck in "running" state
+- **Cause**: `tool_result` never received
+- **Fix**: Check iFlow CLI logs for errors
+
+**Issue**: Tool result not displayed
+- **Cause**: Result is `null` or `undefined`
+- **Fix**: Some tools (like `fs/write_text_file`) return `null` on success
+
 ## When Adding Features
 
 1. **Check existing patterns first** - don't reinvent
@@ -808,3 +1046,15 @@ When adding Canvas-related features:
 - **Inject format guidance** - add to prompt guidance if AI needs to understand Canvas format
 - **Test with Obsidian** - open generated `.canvas` files in Obsidian to verify they render correctly
 - **Consider iFlow CLI limitations** - iFlow doesn't have obsidian-skills, so format help must be at plugin level
+
+### Tool Call-Specific Considerations
+
+When adding tool call features:
+- **Handle all content types** - check for `tool_use`, `tool_result`, and `text` types
+- **Use unique IDs** - tool calls need stable IDs for updates (use `content.id` or generate one)
+- **Update existing UI** - check if tool element exists before creating new one
+- **Display all states** - show running, completed, and error states clearly
+- **Format JSON output** - use `JSON.stringify(obj, null, 2)` for readable parameters/results
+- **Handle null results** - some tools (like `fs/write_text_file`) return `null` on success
+- **Test with real tools** - verify tool calls work with actual iFlow CLI tool execution
+- **Log everything** - tool calls can be complex to debug, log all states and transitions

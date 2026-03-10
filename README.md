@@ -20,6 +20,11 @@
   - 智能检测 Canvas 创建意图（思维导图、流程图、可视化等）
   - 自动注入 JSON Canvas 1.0 格式指导
   - 支持多种节点类型（文本、文件、链接、分组）
+- **工具调用可视化**：实时显示 AI 执行的工具
+  - 🔄 运行中的工具显示动画图标
+  - ✅ 完成的工具显示成功状态
+  - ❌ 失败的工具显示错误信息
+  - 显示工具参数和执行结果
 
 ### 📝 会话管理
 - **历史记录保存**：所有会话自动保存，可随时切换
@@ -61,6 +66,31 @@
 - [AI 理解文档](CLAUDE.md) - 给 Claude AI 阅读的项目文档
 
 ## 🔄 更新日志
+
+### v0.7.0 (2026-03-10)
+
+#### ✨ 新功能
+- **工具调用可视化**：实时显示 AI 执行的工具
+  - 显示工具名称、参数和执行状态
+  - 运行中的工具显示脉冲动画（🔄）
+  - 完成的工具显示绿色对勾（✅）
+  - 失败的工具显示红色错误图标和错误消息（❌）
+  - 显示工具执行结果（格式化的代码块）
+
+#### 🔧 技术实现
+- 扩展 `IFlowToolCall` 接口，添加 status、result、error 字段
+- 添加 `tool_use` 和 `tool_result` 内容类型检测
+- 实现 `showOrUpdateToolCall()` 方法显示工具调用 UI
+- 添加完整的工具调用 CSS 样式（状态指示器、动画）
+
+#### 🐛 Bug 修复
+- 修复 AI 输出 JSON 文本而不是调用工具创建文件的问题
+- 改进 Canvas 格式指导，明确要求使用 `fs/write_text_file` 工具
+- 提供清晰的工具调用参数格式示例
+
+#### 📈 用户体验改进
+- **之前**：AI 调用工具时没有反馈，用户不知道发生了什么
+- **现在**：实时显示工具执行过程，包括参数和结果
 
 ### v0.6.9 (2026-03-10)
 
@@ -271,26 +301,75 @@ npm run build
 
 ### 文件操作示例
 
-AI 可以直接在你的 Obsidian vault 中创建和修改文件：
+AI 可以直接在你的 Obsidian vault 中创建和修改文件，现在可以**实时看到工具执行过程**：
 
-#### 生成新文件
+#### 生成新文件（带工具调用可视化）
 ```
 你：帮我生成一个 Golang 学习路线图，保存为 golang-roadmap.md
 
 AI：好的，我来为你创建一个 Golang 学习路线图...
-✅ 文件已创建：golang-roadmap.md
+
+🔄 fs/write_text_file
+  参数：
+  {"path": "golang-roadmap.md", "content": "# Golang 学习路线图\n..."}
+
+✅ fs/write_text_file
+  结果：
+  null
+
+AI：✅ 文件已创建：golang-roadmap.md
 ```
 
-#### 读取和分析
+#### 读取和分析（显示工具调用过程）
 ```
 你：读取当前目录所有 markdown 文件，生成摘要
 
 AI：我来读取并分析这些文件...
-[读取文件 1/5...]
-✅ 摘要已生成并保存到 summary.md
+
+🔄 fs/read_text_file
+  参数：
+  {"path": "diary-01.md"}
+
+✅ fs/read_text_file
+  结果：
+  {"content": "今天心情不错..."}
+
+🔄 fs/read_text_file
+  参数：
+  {"path": "diary-02.md"}
+
+✅ fs/read_text_file
+  结果：
+  {"content": "今天遇到了一些挑战..."}
+
+🔄 fs/write_text_file
+  参数：
+  {"path": "summary.md", "content": "# 摘要\n..."}
+
+✅ fs/write_text_file
+  结果：
+  null
+
+AI：✅ 摘要已生成并保存到 summary.md
 ```
 
-#### 多步骤工作流
+#### 错误处理（显示错误消息）
+```
+你：创建 /root/test.txt
+
+AI：我来尝试创建文件...
+
+🔄 fs/write_text_file
+  参数：
+  {"path": "/root/test.txt", "content": "test"}
+
+❌ fs/write_text_file
+  错误：权限不足：无法写入 /root/test.txt
+
+AI：抱歉，创建文件失败。没有权限写入 /root/ 目录。
+```
+
+#### 多步骤工作流（显示所有工具调用）
 ```
 你：分析我的日记，提取情绪变化趋势，生成图表数据
 
@@ -300,44 +379,46 @@ AI：好的，我需要：
 3. 生成趋势数据
 4. 创建可视化文件
 
-步骤 1/4：正在读取日记...
-步骤 2/4：正在分析情绪...
-步骤 3/4：正在生成数据...
-步骤 4/4：正在创建图表...
-✅ 分析完成，结果已保存到 emotion-trend.md
-```
+🔄 fs/read_text_file
+  参数：{"path": "diary/2024-01.md"}
 
-#### 修改现有文件
-```
-你：把这个 TODO 列表按优先级重新排序
+✅ fs/read_text_file
+  结果：{...}
 
-AI：我来重新排序 TODO 列表...
-✅ 文件已更新：todo.md
+🔄 fs/write_text_file
+  参数：{"path": "emotion-trend.md", "content": "..."}
+
+✅ fs/write_text_file
+  结果：null
+
+AI：✅ 分析完成，结果已保存到 emotion-trend.md
 ```
 
 **注意事项**：
 - 所有文件操作都通过 Obsidian API，确保与 Obsidian 的缓存、事件和元数据系统完全集成
 - 文件修改会触发 Obsidian 的文件变更事件，其他插件可以监听这些变化
 - AI 会自动创建不存在的目录结构
+- 工具调用过程实时显示，包括参数和结果
 
-#### Canvas 文件操作
+#### Canvas 文件操作（带工具调用可视化）
 
-AI 可以智能识别并创建 Obsidian Canvas 文件：
+AI 可以智能识别并创建 Obsidian Canvas 文件，现在可以看到完整的创建过程：
 
 #### 创建思维导图
 ```
 你：帮我创建一个关于深度学习的思维导图，保存为 deep-learning-mindmap.canvas
 
 AI：好的，我来为你创建一个深度学习思维导图 Canvas...
-✅ Canvas 文件已创建：deep-learning-mindmap.canvas
-```
 
-#### 创建流程图
-```
-你：创建一个 Git 工作流程图
+🔄 fs/write_text_file
+  参数：
+  {"path": "deep-learning-mindmap.canvas", "content": "{\"nodes\":[...],\"edges\":[...]}"}
 
-AI：我来创建一个 Git 工作流的可视化流程图...
-✅ 流程图已保存为 git-workflow.canvas
+✅ fs/write_text_file
+  结果：null
+
+AI：✅ Canvas 文件已创建：deep-learning-mindmap.canvas
+包含 12 个节点和 15 条连接，涵盖深度学习的核心概念。
 ```
 
 #### 自动检测可视化需求
