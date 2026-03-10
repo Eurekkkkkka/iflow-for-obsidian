@@ -360,7 +360,7 @@ export class IFlowService {
 				const relativePath = this.getAbsolutePath(params.path, vaultPath);
 
 				// Use Obsidian's vault API to read the file
-				const content = await this.app.vault.adapter.read(relativePath);
+				const content = await this.app.vault.read(relativePath);
 				console.log('[iFlow] File read successfully:', relativePath);
 				return { content };
 			} catch (error: any) {
@@ -380,15 +380,27 @@ export class IFlowService {
 				const vaultPath = this.getVaultPath();
 				const relativePath = this.getAbsolutePath(params.path, vaultPath);
 
-				// Ensure parent directory exists
-				const parentDir = relativePath.split('/').slice(0, -1).join('/');
-				if (parentDir && !(await this.app.vault.adapter.exists(parentDir))) {
-					await this.app.vault.adapter.mkdir(parentDir);
+				// Check if file already exists
+				const existingFile = this.app.vault.getAbstractFileByPath(relativePath);
+
+				if (existingFile) {
+					// File exists - use modify to update it
+					// getFileByPath is synchronous and returns TFile | null
+					const file = this.app.vault.getFileByPath(relativePath);
+					if (file) {
+						await this.app.vault.modify(file, params.content);
+						console.log('[iFlow] File modified successfully:', relativePath);
+					} else {
+						// Fallback to adapter if getFileByPath fails
+						await this.app.vault.adapter.write(relativePath, params.content);
+						console.log('[iFlow] File written successfully (via adapter):', relativePath);
+					}
+				} else {
+					// File doesn't exist - create new file
+					await this.app.vault.create(relativePath, params.content);
+					console.log('[iFlow] File created successfully:', relativePath);
 				}
 
-				// Use Obsidian's vault API to write the file
-				await this.app.vault.adapter.write(relativePath, params.content);
-				console.log('[iFlow] File written successfully:', relativePath);
 				return null; // Success, no error
 			} catch (error: any) {
 				console.error('[iFlow] fs/write_text_file error:', error);
