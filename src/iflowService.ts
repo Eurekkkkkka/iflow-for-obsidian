@@ -499,25 +499,42 @@ export class IFlowService {
 	 * If the path is absolute, make it relative to vault
 	 */
 	private getAbsolutePath(filePath: string, vaultPath: string): string {
-		// If the path starts with vault path (with leading slash), extract the relative part
+		if (!filePath || typeof filePath !== 'string') {
+			console.warn('[iFlow] getAbsolutePath: invalid filePath', filePath);
+			return filePath || '';
+		}
+
+		// Check for exact match or subpath within vault
 		if (filePath.startsWith(vaultPath + '/')) {
-			filePath = filePath.substring(vaultPath.length + 1); // +1 to skip the slash
-			return filePath;
+			// Path is within vault directory
+			const relativePath = filePath.substring(vaultPath.length + 1);
+			console.log('[iFlow] Path conversion (vault subpath):', {
+				input: filePath,
+				vaultPath,
+				output: relativePath
+			});
+			return relativePath;
 		}
 
-		// Remove leading slash if present (Obsidian paths don't start with /)
+		// Check if path is exactly the vault path (root directory)
+		if (filePath === vaultPath) {
+			console.log('[iFlow] Path is vault root, returning empty');
+			return '';
+		}
+
+		// Check if path starts with '/' (absolute path but not in vault)
 		if (filePath.startsWith('/')) {
-			filePath = filePath.substring(1);
+			// This is an absolute path outside vault - return as-is or handle error
+			console.warn('[iFlow] Absolute path outside vault:', {
+				filePath,
+				vaultPath,
+				message: 'Path is outside vault directory'
+			});
+			return filePath; // Return as-is, let Obsidian handle it
 		}
 
-		// If the path starts with vault path (without leading slash), extract the relative part
-		if (filePath.startsWith(vaultPath)) {
-			filePath = filePath.substring(vaultPath.length);
-			if (filePath.startsWith('/')) {
-				filePath = filePath.substring(1);
-			}
-		}
-
+		// Path appears to be already relative
+		console.log('[iFlow] Path already relative:', filePath);
 		return filePath;
 	}
 
