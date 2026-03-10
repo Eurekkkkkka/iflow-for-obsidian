@@ -347,6 +347,84 @@ export class IFlowService {
 			// Fallback: return a default approval
 			return 'proceed_always';
 		});
+
+		// File system: read text file
+		this.protocol.onServerMethod('fs/read_text_file', async (_id: number, params: any) => {
+			console.log('[iFlow] fs/read_text_file:', params);
+			try {
+				if (!params || typeof params.path !== 'string') {
+					return { error: 'Invalid params: path is required' };
+				}
+
+				const vaultPath = this.getVaultPath();
+				const relativePath = this.getAbsolutePath(params.path, vaultPath);
+
+				// Use Obsidian's vault API to read the file
+				const content = await this.app.vault.adapter.read(relativePath);
+				console.log('[iFlow] File read successfully:', relativePath);
+				return { content };
+			} catch (error: any) {
+				console.error('[iFlow] fs/read_text_file error:', error);
+				return { error: error.message || 'Failed to read file' };
+			}
+		});
+
+		// File system: write text file
+		this.protocol.onServerMethod('fs/write_text_file', async (_id: number, params: any) => {
+			console.log('[iFlow] fs/write_text_file:', params);
+			try {
+				if (!params || typeof params.path !== 'string' || typeof params.content !== 'string') {
+					return { error: 'Invalid params: path and content are required' };
+				}
+
+				const vaultPath = this.getVaultPath();
+				const relativePath = this.getAbsolutePath(params.path, vaultPath);
+
+				// Ensure parent directory exists
+				const parentDir = relativePath.split('/').slice(0, -1).join('/');
+				if (parentDir && !(await this.app.vault.adapter.exists(parentDir))) {
+					await this.app.vault.adapter.mkdir(parentDir);
+				}
+
+				// Use Obsidian's vault API to write the file
+				await this.app.vault.adapter.write(relativePath, params.content);
+				console.log('[iFlow] File written successfully:', relativePath);
+				return null; // Success, no error
+			} catch (error: any) {
+				console.error('[iFlow] fs/write_text_file error:', error);
+				return { error: error.message || 'Failed to write file' };
+			}
+		});
+	}
+
+	/**
+	 * Get the vault path from Obsidian app
+	 */
+	private getVaultPath(): string {
+		const basePath = (this.app as any)?.vault?.adapter?.basePath || '';
+		return basePath.replace(/\/$/, ''); // Remove trailing slash
+	}
+
+	/**
+	 * Convert absolute path to vault-relative path if needed
+	 * If the path is already relative, return it as-is
+	 * If the path is absolute, make it relative to vault
+	 */
+	private getAbsolutePath(filePath: string, vaultPath: string): string {
+		// Remove leading slash if present (Obsidian paths don't start with /)
+		if (filePath.startsWith('/')) {
+			filePath = filePath.substring(1);
+		}
+
+		// If the path starts with vault path, extract the relative part
+		if (filePath.startsWith(vaultPath)) {
+			filePath = filePath.substring(vaultPath.length);
+			if (filePath.startsWith('/')) {
+				filePath = filePath.substring(1);
+			}
+		}
+
+		return filePath;
 	}
 
 	private handleIncomingMessage(data: string): void {
