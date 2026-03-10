@@ -506,8 +506,7 @@
 	padding: 12px;
 	background: var(--background-primary);
 	border-top: 1px solid var(--background-modifier-border);
-	max-height: 50vh;
-	overflow-y: auto;
+	overflow: visible;
 }
 
 /* Input nav row (model selector, mode selector) */
@@ -587,32 +586,33 @@
 
 .iflow-model-dropdown {
 	position: absolute;
-	bottom: 100%;
+	top: 100%;
 	left: 0;
-	margin-bottom: 4px;
+	margin-top: 4px;
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
 	background: var(--background-secondary);
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 6px;
-	box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.2);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 	z-index: 1000;
 	width: max-content;
 	max-width: 300px;
 	padding: 4px;
 	opacity: 0;
 	visibility: hidden;
-	transition: opacity 0.15s ease, visibility 0.15s ease;
+	transform: translateY(-4px);
+	transition: opacity 0.15s ease, visibility 0.15s ease, transform 0.15s ease;
 	max-height: 300px;
 	overflow-y: auto;
 }
 
-.iflow-model-btn:hover + .iflow-model-dropdown,
-.iflow-model-selector:hover .iflow-model-dropdown,
-.iflow-model-dropdown:focus-within {
+/* Show dropdown when .open class is added (click toggle) */
+.iflow-model-selector.open .iflow-model-dropdown {
 	opacity: 1;
 	visibility: visible;
+	transform: translateY(0);
 }
 
 .iflow-model-option {
@@ -687,29 +687,30 @@
 
 .iflow-mode-dropdown {
 	position: absolute;
-	bottom: 100%;
+	top: 100%;
 	right: 0;
-	margin-bottom: 4px;
+	margin-top: 4px;
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
 	background: var(--background-secondary);
 	border: 1px solid var(--background-modifier-border);
 	border-radius: 6px;
-	box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.2);
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
 	z-index: 1000;
 	width: max-content;
 	padding: 4px;
 	opacity: 0;
 	visibility: hidden;
-	transition: opacity 0.15s ease, visibility 0.15s ease;
+	transform: translateY(-4px);
+	transition: opacity 0.15s ease, visibility 0.15s ease, transform 0.15s ease;
 }
 
-.iflow-mode-btn:hover + .iflow-mode-dropdown,
-.iflow-mode-selector:hover .iflow-mode-dropdown,
-.iflow-mode-dropdown:focus-within {
+/* Show dropdown when .open class is added (click toggle) */
+.iflow-mode-selector.open .iflow-mode-dropdown {
 	opacity: 1;
 	visibility: visible;
+	transform: translateY(0);
 }
 
 .iflow-mode-chevron {
