@@ -1,6 +1,6 @@
 {
   "name": "iflow-for-obsidian",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "description": "iFlow CLI integration for Obsidian",
   "main": "main.js",
   "scripts": {
