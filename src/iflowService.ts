@@ -58,6 +58,9 @@ class AcpProtocol {
 		reject: (error: Error) => void;
 	}>();
 
+	/** Registered handlers for server-initiated requests (have an id). */
+	private readonly serverMethodHandlers = new Map<string, (id: number, params: any) => Promise<any>>();
+
 	constructor(private send: (message: string) => void) {}
 
 	sendRequest(method: string, params?: any): Promise<any> {
@@ -80,6 +83,37 @@ class AcpProtocol {
 		});
 	}
 
+	/**
+	 * Register a handler for server-initiated requests (has both id and method).
+	 */
+	onServerMethod(method: string, handler: (id: number, params: any) => Promise<any>): void {
+		this.serverMethodHandlers.set(method, handler);
+	}
+
+	/**
+	 * Send a result response to a server-initiated request.
+	 */
+	private sendResult(id: number, result: any): void {
+		const response: JsonRpcResponse = {
+			jsonrpc: '2.0',
+			id,
+			result,
+		};
+		this.send(JSON.stringify(response));
+	}
+
+	/**
+	 * Send an error response to a server-initiated request.
+	 */
+	private sendError(id: number, code: number, message: string): void {
+		const response: JsonRpcResponse = {
+			jsonrpc: '2.0',
+			id,
+			error: { code, message },
+		};
+		this.send(JSON.stringify(response));
+	}
+
 	handleMessage(data: string): JsonRpcResponse | JsonRpcNotification | null {
 		// Skip debug/non-JSON messages
 		const trimmed = data.trim();
@@ -88,13 +122,15 @@ class AcpProtocol {
 		}
 
 		try {
-			const message = JSON.parse(trimmed) as JsonRpcResponse | JsonRpcNotification;
+			const message = JSON.parse(trimmed) as any;
+			const id = message.id as number | undefined;
+			const method = message.method as string | undefined;
 
-			// Handle response
-			if ('id' in message && typeof message.id !== 'undefined') {
-				const pending = this.pendingRequests.get(message.id);
+			// Case 1: Response to a client-initiated request (has id, no method)
+			if (id !== undefined && !method) {
+				const pending = this.pendingRequests.get(id);
 				if (pending) {
-					this.pendingRequests.delete(message.id);
+					this.pendingRequests.delete(id);
 					if (message.error) {
 						pending.reject(new Error(message.error.message));
 					} else {
@@ -109,8 +145,28 @@ class AcpProtocol {
 				return message;
 			}
 
-			// Handle notification
-			return message;
+			// Case 2: Server-initiated request (has both id and method)
+			if (id !== undefined && method) {
+				const handler = this.serverMethodHandlers.get(method);
+				if (handler) {
+					// Handle asynchronously and send response
+					handler(id, message.params)
+						.then((result) => this.sendResult(id, result))
+						.catch((err: Error) => this.sendError(id, -32603, err.message));
+				} else {
+					console.warn(`[iFlow] No handler for server method: ${method}`);
+					this.sendError(id, -32601, `Method not found: ${method}`);
+				}
+				return message;
+			}
+
+			// Case 3: Notification (has method but no id)
+			if (method && id === undefined) {
+				return message as JsonRpcNotification;
+			}
+
+			console.warn('[iFlow] Unroutable message:', message);
+			return null;
 		} catch (error) {
 			console.error('Failed to parse ACP message:', error);
 			return null;
@@ -269,6 +325,28 @@ export class IFlowService {
 
 		this.sessionId = sessionResult.sessionId;
 		console.log('ACP session created:', this.sessionId);
+
+		// Register server method handlers
+		this.registerServerHandlers();
+	}
+
+	private registerServerHandlers(): void {
+		if (!this.protocol) return;
+
+		// Automatically approve all permission requests for local Obsidian plugin
+		this.protocol.onServerMethod('session/request_permission', async (_id: number, params: any) => {
+			console.log('[iFlow] Permission request:', params);
+
+			// Return the first option (usually "proceed_always" or similar)
+			if (params?.options && params.options.length > 0) {
+				const firstOption = params.options[0];
+				console.log('[iFlow] Permission approved:', firstOption.optionId);
+				return firstOption.optionId;
+			}
+
+			// Fallback: return a default approval
+			return 'proceed_always';
+		});
 	}
 
 	private handleIncomingMessage(data: string): void {
@@ -286,33 +364,10 @@ export class IFlowService {
 			return;
 		}
 
-		// Handle JSON-RPC notifications
+		// Handle JSON-RPC notifications (no id)
 		if (!('id' in message)) {
 			const notification = message as JsonRpcNotification;
 			console.log('[iFlow] Notification:', notification.method);
-
-			// Handle session/request_permission notifications
-			if (notification.method === 'session/request_permission') {
-				const params = notification.params;
-				console.log('[iFlow] Permission request:', params);
-
-				// Automatically approve all permissions for local Obsidian plugin
-				// The user has already initiated the action by sending a message
-				if (params?.options && params.options.length > 0) {
-					const firstOption = params.options[0];
-					if (this.protocol && this.sessionId) {
-						this.protocol.sendRequest('session/permission_response', {
-							sessionId: this.sessionId,
-							permissionRequestId: params.permissionRequestId,
-							permissionDecision: firstOption.optionId,
-						}).then(() => {
-							console.log('[iFlow] Permission approved:', firstOption.optionId);
-						}).catch((error) => {
-							console.error('[iFlow] Failed to send permission response:', error);
-						});
-					}
-				}
-			}
 
 			// Handle session/update notifications (stream content)
 			if (notification.method === 'session/update') {
