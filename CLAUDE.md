@@ -51,15 +51,27 @@ iFlow CLI uses JSON-RPC 2.0 over WebSocket:
 7. Final response has stopReason: 'end_turn' or 'max_turns'
 ```
 
-**CRITICAL (v0.7.1)**: Session settings MUST include `permission_mode` for tools to work:
+**CRITICAL (v0.7.1+)**: Session settings MUST include `permission_mode` for tools to work:
 ```typescript
-// iflowService.ts lines 355-361
+// iflowService.ts lines 355-366
 const sessionSettings: Record<string, unknown> = {
     permission_mode: 'default',  // REQUIRED for tool calling to work!
-    append_system_prompt: '',     // Clear any prior prompts
+    append_system_prompt: `IMPORTANT: When generating structured content like learning roadmaps, diagrams, knowledge graphs, or similar content:
+1. Use the fs/write_text_file tool to create a file automatically
+2. For visual roadmaps and diagrams, create an Obsidian Canvas file (.canvas extension)
+3. Do NOT output large JSON structures as text - create files instead
+4. Use descriptive filenames based on the content (e.g., "golang-learning-roadmap.canvas")
+5. After creating the file, provide a brief summary of what was created`,
     add_dirs: [cwd],              // Allow access to vault directory
 };
 ```
+
+**v0.7.2 System Prompt**: The `append_system_prompt` instructs the AI model to:
+- Use `fs/write_text_file` tool when generating structured content
+- Create Canvas files (.canvas) for visual roadmaps and diagrams
+- Avoid outputting large JSON as text (causes user confusion)
+- Use descriptive filenames
+- Provide summary after file creation
 
 **IMPORTANT:** The `onEnd` callback MUST be triggered when `stopReason` is detected:
 
@@ -568,6 +580,51 @@ private getAbsolutePath(filePath: string, vaultPath: string): string {
 ```
 
 **Result:** `/Users/.../vault/file.canvas` → `file.canvas` (correct!)
+
+### Bug #10: AI outputs JSON as text instead of creating files (v0.7.2)
+
+**Symptom:** When asking AI to generate learning roadmaps or diagrams, it outputs complete JSON Canvas structure as text in chat instead of calling `fs/write_text_file` to create a file.
+
+**Example User Experience:**
+- User: "生成一个golang 的学习路线图" (Generate a Golang learning roadmap)
+- Expected: AI creates `golang-learning-roadmap.canvas` file
+- Actual: AI outputs hundreds of lines of JSON text in chat
+
+**Root Cause:** AI model doesn't have explicit instructions to use file tools for structured content. It defaults to outputting text.
+
+**Discovery Process:**
+1. User reported issue persists after v0.7.1 tool calling fix
+2. Logs showed AI was generating correct Canvas JSON content
+3. But JSON was being output as `text` chunks, not via `fs/write_text_file` tool
+4. Tools like `w_query` (web search) and `bash` were being used
+5. But `fs/write_text_file` was never called
+
+**Fix:** Add system prompt via `append_system_prompt` in session settings:
+```typescript
+// iflowService.ts lines 357-366
+const sessionSettings: Record<string, unknown> = {
+    permission_mode: 'default',
+    append_system_prompt: `IMPORTANT: When generating structured content like learning roadmaps, diagrams, knowledge graphs, or similar content:
+1. Use the fs/write_text_file tool to create a file automatically
+2. For visual roadmaps and diagrams, create an Obsidian Canvas file (.canvas extension)
+3. Do NOT output large JSON structures as text - create files instead
+4. Use descriptive filenames based on the content (e.g., "golang-learning-roadmap.canvas")
+5. After creating the file, provide a brief summary of what was created`,
+    add_dirs: [cwd],
+};
+```
+
+**Key Insight:** The `append_system_prompt` session setting is passed to the AI model and guides its behavior. This is different from client-side prompts - it's server-side instruction that affects how the model thinks about tool usage.
+
+**Impact:**
+- AI now automatically creates files when generating structured content
+- Users get actual Canvas files they can open and edit
+- Chat interface shows tool call progress and summary
+- Eliminates confusion from large JSON dumps in chat
+
+**Related:**
+- Similar to how VSCode plugin uses system prompts for mode-specific behavior
+- See `iflow-for-vscode/src/acp/runtimeConfigApplier.ts` for reference
 
 ## Development Workflow
 

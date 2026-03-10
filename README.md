@@ -68,6 +68,28 @@
 
 ## 🔄 更新日志
 
+### v0.7.2 (2026-03-10)
+
+#### 🐛 关键 Bug 修复
+- **修复 AI 不使用文件工具创建内容**：添加系统提示词指导 AI 正确使用文件操作
+  - **问题**：当用户要求生成学习路线图或结构化内容时，AI 将完整 JSON 输出为文本而不是调用 `fs/write_text_file` 工具创建文件
+  - **根本原因**：AI 模型没有收到明确指示要求使用文件工具来处理结构化内容
+  - **解决方案**：在 session settings 中添加 `append_system_prompt`，明确指导 AI：
+    * 生成路线图、图表等结构化内容时使用 `fs/write_text_file` 工具
+    * 为可视化内容创建 Canvas 文件（.canvas 扩展名）
+    * 不要将大型 JSON 结构输出为文本
+    * 使用描述性文件名（如 "golang-learning-roadmap.canvas"）
+    * 创建文件后提供简要总结
+
+#### 🔧 技术实现
+- 在 `iflowService.ts` 的 `initializeConnection()` 方法中添加系统提示词
+- 通过 `append_system_prompt` session setting 将指导传递给 AI 模型
+- 与 VSCode 插件的系统提示词模式保持一致
+
+#### 📈 用户体验改进
+- **之前**：生成学习路线图时，AI 在聊天中输出大量 JSON 文本，没有实际创建文件
+- **现在**：AI 自动创建 Canvas 文件到 vault，并在聊天中显示工具调用过程和结果摘要
+
 ### v0.7.1 (2026-03-10)
 
 #### 🐛 关键 Bug 修复
