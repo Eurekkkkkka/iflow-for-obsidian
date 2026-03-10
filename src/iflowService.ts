@@ -415,8 +415,8 @@ export class IFlowService {
 				const vaultPath = this.getVaultPath();
 				const relativePath = this.getAbsolutePath(params.path, vaultPath);
 
-				// Use Obsidian's vault API to read the file
-				const content = await this.app.vault.read(relativePath);
+				// Use Obsidian's vault adapter to read the file (accepts string path)
+				const content = await this.app.vault.adapter.read(relativePath);
 				console.log('[iFlow] File read successfully:', relativePath);
 				return { content };
 			} catch (error: any) {
@@ -436,50 +436,19 @@ export class IFlowService {
 				const vaultPath = this.getVaultPath();
 				const relativePath = this.getAbsolutePath(params.path, vaultPath);
 
+				console.log('[iFlow] Writing file:', relativePath);
+
 				// Special handling for canvas files
+				let content = params.content;
 				if (this.isCanvasFile(relativePath)) {
 					console.log('[iFlow] Creating canvas file:', relativePath);
-					// Normalize canvas content to ensure valid JSON structure
-					const canvasContent = this.normalizeCanvasContent(params.content);
-
-					// Check if file already exists
-					const existingFile = this.app.vault.getAbstractFileByPath(relativePath);
-					if (existingFile) {
-						const file = this.app.vault.getFileByPath(relativePath);
-						if (file) {
-							await this.app.vault.modify(file, canvasContent);
-							console.log('[iFlow] Canvas file modified successfully:', relativePath);
-						} else {
-							await this.app.vault.adapter.write(relativePath, canvasContent);
-							console.log('[iFlow] Canvas file written successfully (via adapter):', relativePath);
-						}
-					} else {
-						await this.app.vault.create(relativePath, canvasContent);
-						console.log('[iFlow] Canvas file created successfully:', relativePath);
-					}
-					return null;
+					content = this.normalizeCanvasContent(params.content);
 				}
 
-				// Regular file handling
-				const existingFile = this.app.vault.getAbstractFileByPath(relativePath);
-
-				if (existingFile) {
-					// File exists - use modify to update it
-					// getFileByPath is synchronous and returns TFile | null
-					const file = this.app.vault.getFileByPath(relativePath);
-					if (file) {
-						await this.app.vault.modify(file, params.content);
-						console.log('[iFlow] File modified successfully:', relativePath);
-					} else {
-						// Fallback to adapter if getFileByPath fails
-						await this.app.vault.adapter.write(relativePath, params.content);
-						console.log('[iFlow] File written successfully (via adapter):', relativePath);
-					}
-				} else {
-					// File doesn't exist - create new file
-					await this.app.vault.create(relativePath, params.content);
-					console.log('[iFlow] File created successfully:', relativePath);
-				}
+				// Use adapter.write which handles both create and modify
+				// This is more reliable than trying to detect if file exists
+				await this.app.vault.adapter.write(relativePath, content);
+				console.log('[iFlow] File written successfully:', relativePath);
 
 				return null; // Success, no error
 			} catch (error: any) {

@@ -288,7 +288,7 @@ var IFlowService = class {
         }
         const vaultPath = this.getVaultPath();
         const relativePath = this.getAbsolutePath(params.path, vaultPath);
-        const content = await this.app.vault.read(relativePath);
+        const content = await this.app.vault.adapter.read(relativePath);
         console.log("[iFlow] File read successfully:", relativePath);
         return { content };
       } catch (error) {
@@ -304,39 +304,14 @@ var IFlowService = class {
         }
         const vaultPath = this.getVaultPath();
         const relativePath = this.getAbsolutePath(params.path, vaultPath);
+        console.log("[iFlow] Writing file:", relativePath);
+        let content = params.content;
         if (this.isCanvasFile(relativePath)) {
           console.log("[iFlow] Creating canvas file:", relativePath);
-          const canvasContent = this.normalizeCanvasContent(params.content);
-          const existingFile2 = this.app.vault.getAbstractFileByPath(relativePath);
-          if (existingFile2) {
-            const file = this.app.vault.getFileByPath(relativePath);
-            if (file) {
-              await this.app.vault.modify(file, canvasContent);
-              console.log("[iFlow] Canvas file modified successfully:", relativePath);
-            } else {
-              await this.app.vault.adapter.write(relativePath, canvasContent);
-              console.log("[iFlow] Canvas file written successfully (via adapter):", relativePath);
-            }
-          } else {
-            await this.app.vault.create(relativePath, canvasContent);
-            console.log("[iFlow] Canvas file created successfully:", relativePath);
-          }
-          return null;
+          content = this.normalizeCanvasContent(params.content);
         }
-        const existingFile = this.app.vault.getAbstractFileByPath(relativePath);
-        if (existingFile) {
-          const file = this.app.vault.getFileByPath(relativePath);
-          if (file) {
-            await this.app.vault.modify(file, params.content);
-            console.log("[iFlow] File modified successfully:", relativePath);
-          } else {
-            await this.app.vault.adapter.write(relativePath, params.content);
-            console.log("[iFlow] File written successfully (via adapter):", relativePath);
-          }
-        } else {
-          await this.app.vault.create(relativePath, params.content);
-          console.log("[iFlow] File created successfully:", relativePath);
-        }
+        await this.app.vault.adapter.write(relativePath, content);
+        console.log("[iFlow] File written successfully:", relativePath);
         return null;
       } catch (error) {
         console.error("[iFlow] fs/write_text_file error:", error);
