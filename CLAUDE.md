@@ -45,10 +45,20 @@ iFlow CLI uses JSON-RPC 2.0 over WebSocket:
 1. WebSocket connect → ws://localhost:8080/acp
 2. initialize → { protocolVersion: 1, clientCapabilities: {...} }
 3. authenticate → { methodId: 'oauth-iflow' } (if needed)
-4. session/new → { cwd, mcpServers: [], settings: {} }
+4. session/new → { cwd, mcpServers: [], settings: { permission_mode: 'default', append_system_prompt: '', add_dirs: [cwd] } }
 5. session/prompt → { prompt: [{ type: 'text', text: '...' }] }
 6. Receive session/update notifications (streaming chunks)
 7. Final response has stopReason: 'end_turn' or 'max_turns'
+```
+
+**CRITICAL (v0.7.1)**: Session settings MUST include `permission_mode` for tools to work:
+```typescript
+// iflowService.ts lines 355-361
+const sessionSettings: Record<string, unknown> = {
+    permission_mode: 'default',  // REQUIRED for tool calling to work!
+    append_system_prompt: '',     // Clear any prior prompts
+    add_dirs: [cwd],              // Allow access to vault directory
+};
 ```
 
 **IMPORTANT:** The `onEnd` callback MUST be triggered when `stopReason` is detected:
@@ -492,6 +502,72 @@ const panel = selector.createDiv({ cls: 'iflow-conversation-panel hidden' });
     overflow-y: auto;
 }
 ```
+
+### Bug #8: AI doesn't call tools (v0.7.1)
+
+**Symptom:** AI outputs text description instead of calling `fs/write_text_file` tool
+
+**Root Cause:** Missing `permission_mode` in session settings
+
+**Discovery Process:**
+1. Logs showed `tool_call` messages arriving but no tool execution
+2. Compared with VSCode plugin (`iflow-for-vscode`)
+3. Found VSCode uses `permission_mode: 'default'` in session settings
+
+**Fix:** Add `permission_mode` to session settings:
+```typescript
+// iflowService.ts lines 355-361
+const sessionSettings: Record<string, unknown> = {
+    permission_mode: 'default',  // REQUIRED for tools to work!
+    append_system_prompt: '',
+    add_dirs: [cwd],
+};
+```
+
+**Impact:** This is the MOST CRITICAL setting for tool calling to work. Without it:
+- AI won't use file system tools
+- Canvas files won't be created
+- All file operations will fail silently
+
+### Bug #9: Path handling TypeError (v0.7.1)
+
+**Symptom:** `TypeError: The "path" argument must be of type string. Received undefined`
+
+**Root Cause:** `getAbsolutePath()` removes leading slash BEFORE checking for vault path
+
+**Example:**
+- Input: `/Users/jie/Documents/Obsidian Vault/file.canvas`
+- After removing `/`: `Users/jie/Documents/Obsidian Vault/file.canvas`
+- Vault path: `/Users/jie/Documents/Obsidian Vault`
+- Check fails because strings don't match!
+
+**Fix:** Check for vault path FIRST, then remove leading slash:
+```typescript
+// iflowService.ts lines 496-517
+private getAbsolutePath(filePath: string, vaultPath: string): string {
+    // Check for full path FIRST (before removing slash)
+    if (filePath.startsWith(vaultPath + '/')) {
+        return filePath.substring(vaultPath.length + 1);
+    }
+
+    // Then handle leading slash
+    if (filePath.startsWith('/')) {
+        filePath = filePath.substring(1);
+    }
+
+    // Finally, check for vault path without leading slash
+    if (filePath.startsWith(vaultPath)) {
+        filePath = filePath.substring(vaultPath.length);
+        if (filePath.startsWith('/')) {
+            filePath = filePath.substring(1);
+        }
+    }
+
+    return filePath;
+}
+```
+
+**Result:** `/Users/.../vault/file.canvas` → `file.canvas` (correct!)
 
 ## Development Workflow
 

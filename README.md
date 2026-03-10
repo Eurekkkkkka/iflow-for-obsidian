@@ -67,6 +67,26 @@
 
 ## 🔄 更新日志
 
+### v0.7.1 (2026-03-10)
+
+#### 🐛 关键 Bug 修复
+- **修复工具调用不工作**：添加 `permission_mode: 'default'` 到 session settings
+  - 这是导致 AI 无法使用 `fs/write_text_file` 和 `fs/read_text_file` 工具的根本原因
+  - 通过对比 VSCode 插件实现发现并修复
+  - **影响**：AI 现在可以正确创建 Canvas 文件、写入文件和使用所有文件系统工具
+- **修复路径处理错误**：`TypeError: The "path" argument must be of type string. Received undefined`
+  - 改进 `getAbsolutePath()` 方法，正确处理绝对路径
+  - 现在可以将 `/Users/.../vault/file.canvas` 正确转换为 `file.canvas`
+
+#### 🔧 技术实现
+- Session settings 现在包含必要的权限模式配置
+- 路径转换逻辑优化：先检查完整 vault 路径，再去掉前导斜杠
+- 与 VSCode 插件保持一致的 session 配置模式
+
+#### 📈 用户体验改进
+- **之前**：AI 输出文本描述而不是创建文件
+- **现在**：AI 直接调用工具创建文件，并在界面上显示工具执行过程
+
 ### v0.7.0 (2026-03-10)
 
 #### ✨ 新功能
