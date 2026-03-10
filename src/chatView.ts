@@ -3,6 +3,7 @@ import IFlowPlugin from './main';
 import { IFlowService } from './iflowService';
 import { ConversationStore, type Conversation, type Message } from './conversationStore';
 import type { IFlowSettings } from './main';
+import { initI18n, t, format } from './i18n';
 
 export const VIEW_TYPE_IFLOW_CHAT = 'iflow-chat-view';
 
@@ -33,6 +34,9 @@ export class IFlowChatView extends ItemView {
 		super(leaf);
 		this.plugin = plugin;
 		this.iflowService = iflowService;
+
+		// Initialize i18n
+		initI18n();
 
 		// 获取 vault 路径用于会话隔离存储
 		const vaultPath = this.plugin.getVaultPath();
@@ -94,14 +98,14 @@ export class IFlowChatView extends ItemView {
 		// Textarea for input
 		const textarea = inputWrapper.createEl('textarea', {
 			cls: 'iflow-input',
-			attr: { placeholder: 'Ask iFlow anything... (Use @ to reference files, Shift+Enter for new line)' },
+			attr: { placeholder: t().input.placeholder },
 		});
 		this.textarea = textarea;
 
 		// Send button
 		const sendButton = inputWrapper.createEl('button', {
 			cls: 'iflow-send-button',
-			text: 'Send',
+			text: t().ui.send,
 		});
 		sendButton.onclick = () => this.sendMessage();
 
@@ -318,7 +322,7 @@ export class IFlowChatView extends ItemView {
 		messageEl.dataset.id = id;
 
 		const roleEl = messageEl.createDiv({ cls: 'iflow-message-role' });
-		roleEl.textContent = role === 'user' ? 'You' : 'iFlow';
+		roleEl.textContent = role === 'user' ? t().roles.user : t().roles.assistant;
 
 		const contentEl = messageEl.createDiv({ cls: 'iflow-message-content' });
 		contentEl.innerHTML = this.formatMessage(content);
@@ -375,7 +379,7 @@ export class IFlowChatView extends ItemView {
 			const details = toolContainer.createDiv({ cls: 'iflow-tool-details' });
 
 			if (tool.input && Object.keys(tool.input).length > 0) {
-				details.createDiv({ cls: 'iflow-tool-section-title', text: '参数：' });
+				details.createDiv({ cls: 'iflow-tool-section-title', text: t().tools.params });
 				const inputPre = details.createEl('pre', { cls: 'iflow-tool-input' });
 				inputPre.createEl('code', { text: JSON.stringify(tool.input, null, 2) });
 			}
@@ -395,7 +399,7 @@ export class IFlowChatView extends ItemView {
 				if (!resultEl) {
 					const details = toolContainer.querySelector('.iflow-tool-details');
 					if (details) {
-						details.createDiv({ cls: 'iflow-tool-section-title', text: '结果：' });
+						details.createDiv({ cls: 'iflow-tool-section-title', text: t().tools.result });
 						resultEl = details.createEl('pre', { cls: 'iflow-tool-result' });
 						const resultText = typeof tool.result === 'string'
 							? tool.result
@@ -412,7 +416,7 @@ export class IFlowChatView extends ItemView {
 					const details = toolContainer.querySelector('.iflow-tool-details');
 					if (details) {
 						errorEl = details.createDiv({ cls: 'iflow-tool-error' });
-						errorEl.createSpan({ text: `❌ 错误: ${tool.error}` });
+						errorEl.createSpan({ text: `${t().tools.error}${tool.error}` });
 					}
 				}
 			}
@@ -439,32 +443,31 @@ export class IFlowChatView extends ItemView {
 		this.messagesContainer.createDiv({
 			cls: 'iflow-welcome',
 		}, (el) => {
-			el.createEl('h2', { text: '👋 Welcome to iFlow!' });
-			el.createEl('p', { text: 'Your AI-powered coding assistant for Obsidian.' });
-			el.createEl('p', { text: 'I can help you with:' });
-			el.createEl('p', { text: '• Reading and editing your notes' });
-			el.createEl('p', { text: '• Searching your vault' });
-			el.createEl('p', { text: '• Writing and refactoring code' });
-			el.createEl('p', { text: '• Answering questions' });
-			el.createEl('p', { text: '\nSelect a model and mode above, then start typing!' });
+			el.createEl('h2', { text: t().welcome.title });
+			el.createEl('p', { text: t().welcome.subtitle });
+			el.createEl('p', { text: t().welcome.helpTitle });
+			t().welcome.helpItems.forEach(item => {
+				el.createEl('p', { text: item });
+			});
+			el.createEl('p', { text: t().welcome.hint });
 		});
 	}
 
 	private createModelSelector(container: HTMLElement): HTMLElement {
 		const selector = container.createDiv({ cls: 'iflow-model-selector' });
 
-		// Full models list (matching VS Code plugin)
+		// Full models list (matching VS Code plugin) - use i18n for names
 		const defaultModels = [
-			{ id: 'glm-4.7', name: 'GLM-4.7' },
-			{ id: 'glm-5', name: 'GLM-5' },
-			{ id: 'deepseek-v3.2-chat', name: 'DeepSeek-V3.2' },
-			{ id: 'iFlow-ROME-30BA3B', name: 'iFlow-ROME-30BA3B(Preview)' },
-			{ id: 'qwen3-coder-plus', name: 'Qwen3-Coder-Plus' },
-			{ id: 'kimi-k2-thinking', name: 'Kimi-K2-Thinking' },
-			{ id: 'minimax-m2.5', name: 'MiniMax-M2.5' },
-			{ id: 'minimax-m2.1', name: 'MiniMax-M2.1' },
-			{ id: 'kimi-k2-0905', name: 'Kimi-K2-0905' },
-			{ id: 'kimi-k2.5', name: 'Kimi-K2.5' },
+			{ id: 'glm-4.7', name: t().models['glm-4.7'] },
+			{ id: 'glm-5', name: t().models['glm-5'] },
+			{ id: 'deepseek-v3.2-chat', name: t().models['deepseek-v3.2-chat'] },
+			{ id: 'iFlow-ROME-30BA3B', name: t().models['iFlow-ROME-30BA3B'] },
+			{ id: 'qwen3-coder-plus', name: t().models['qwen3-coder-plus'] },
+			{ id: 'kimi-k2-thinking', name: t().models['kimi-k2-thinking'] },
+			{ id: 'minimax-m2.5', name: t().models['minimax-m2.5'] },
+			{ id: 'minimax-m2.1', name: t().models['minimax-m2.1'] },
+			{ id: 'kimi-k2-0905', name: t().models['kimi-k2-0905'] },
+			{ id: 'kimi-k2.5', name: t().models['kimi-k2.5'] },
 		];
 
 		this.availableModels = defaultModels;
@@ -491,16 +494,37 @@ export class IFlowChatView extends ItemView {
 				cls: `iflow-model-option ${model.id === this.currentModel ? 'selected' : ''}`,
 				text: model.name,
 			}, (el) => {
-				el.onclick = () => {
+				el.onclick = (e) => {
+					e.stopPropagation();
 					this.currentModel = model.id;
 					label.textContent = model.name;
 					dropdown.querySelectorAll('.iflow-model-option').forEach(opt => {
 						opt.removeClass('selected');
 					});
 					el.addClass('selected');
+					// Close dropdown after selection
+					selector.removeClass('open');
 				};
 			});
 		});
+
+		// Click to toggle dropdown
+		btn.onclick = (e) => {
+			e.stopPropagation();
+			// Close other dropdowns first
+			document.querySelectorAll('.iflow-model-selector.open, .iflow-mode-selector.open').forEach(el => {
+				el.removeClass('open');
+			});
+			selector.toggleClass('open', !selector.hasClass('open'));
+		};
+
+		// Close dropdown when clicking outside
+		const closeHandler = (e: MouseEvent) => {
+			if (!selector.contains(e.target as Node)) {
+				selector.removeClass('open');
+			}
+		};
+		document.addEventListener('click', closeHandler);
 
 		return selector;
 	}
@@ -508,12 +532,12 @@ export class IFlowChatView extends ItemView {
 	private createModeSelector(container: HTMLElement): HTMLElement {
 		const selector = container.createDiv({ cls: 'iflow-mode-selector' });
 
-		// Modes list
+		// Modes list (use i18n)
 		const modes = [
-			{ id: 'default', name: 'Normal', icon: '⚡' },
-			{ id: 'yolo', name: 'YOLO', icon: '🚀' },
-			{ id: 'smart', name: 'Smart', icon: '🧠' },
-			{ id: 'plan', name: 'Plan', icon: '📋' },
+			{ id: 'default', name: t().modes.default.name, icon: t().modes.default.icon },
+			{ id: 'yolo', name: t().modes.yolo.name, icon: t().modes.yolo.icon },
+			{ id: 'smart', name: t().modes.smart.name, icon: t().modes.smart.icon },
+			{ id: 'plan', name: t().modes.plan.name, icon: t().modes.plan.icon },
 		];
 
 		this.availableModes = modes;
@@ -524,8 +548,8 @@ export class IFlowChatView extends ItemView {
 		});
 
 		const currentMode = modes.find(m => m.id === this.currentMode);
-		const icon = btn.createSpan({ cls: 'iflow-mode-icon', text: currentMode?.icon || '⚡' });
-		const label = btn.createSpan({ cls: 'iflow-mode-label', text: currentMode?.name || 'Normal' });
+		const icon = btn.createSpan({ cls: 'iflow-mode-icon', text: currentMode?.icon || t().modes.default.icon });
+		const label = btn.createSpan({ cls: 'iflow-mode-label', text: currentMode?.name || t().modes.default.name });
 		const chevron = btn.createDiv({ cls: 'iflow-mode-chevron' });
 		chevron.innerHTML = `
 			<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -543,7 +567,8 @@ export class IFlowChatView extends ItemView {
 			}, (el) => {
 				const optIcon = el.createSpan({ cls: 'iflow-mode-icon', text: mode.icon });
 				const optLabel = el.createSpan({ text: mode.name });
-				el.onclick = () => {
+				el.onclick = (e) => {
+					e.stopPropagation();
 					this.currentMode = mode.id;
 					icon.textContent = mode.icon;
 					label.textContent = mode.name;
@@ -551,9 +576,29 @@ export class IFlowChatView extends ItemView {
 						opt.removeClass('selected');
 					});
 					el.addClass('selected');
+					// Close dropdown after selection
+					selector.removeClass('open');
 				};
 			});
 		});
+
+		// Click to toggle dropdown
+		btn.onclick = (e) => {
+			e.stopPropagation();
+			// Close other dropdowns first
+			document.querySelectorAll('.iflow-model-selector.open, .iflow-mode-selector.open').forEach(el => {
+				el.removeClass('open');
+			});
+			selector.toggleClass('open', !selector.hasClass('open'));
+		};
+
+		// Close dropdown when clicking outside
+		const closeHandler = (e: MouseEvent) => {
+			if (!selector.contains(e.target as Node)) {
+				selector.removeClass('open');
+			}
+		};
+		document.addEventListener('click', closeHandler);
 
 		return selector;
 	}
@@ -564,7 +609,7 @@ export class IFlowChatView extends ItemView {
 		});
 
 		const icon = toggle.createSpan({ cls: 'iflow-thinking-icon', text: '🧠' });
-		const label = toggle.createSpan({ text: 'Thinking' });
+		const label = toggle.createSpan({ text: t().ui.thinking });
 
 		toggle.onclick = () => {
 			this.thinkingEnabled = !this.thinkingEnabled;
@@ -592,10 +637,10 @@ export class IFlowChatView extends ItemView {
 
 		this.conversationTitleEl = trigger.createSpan({
 			cls: 'iflow-conversation-title',
-			text: 'New Conversation',
+			text: t().ui.newConversation,
 		});
 
-		const meta = trigger.createSpan({ cls: 'iflow-conversation-meta', text: '0 messages' });
+		const meta = trigger.createSpan({ cls: 'iflow-conversation-meta', text: t().ui.noMessages });
 
 		const chevron = trigger.createDiv({ cls: 'iflow-conversation-chevron' });
 		chevron.innerHTML = `
@@ -618,7 +663,7 @@ export class IFlowChatView extends ItemView {
 		const searchBox = panel.createDiv({ cls: 'iflow-conversation-search' });
 		const searchInput = searchBox.createEl('input', {
 			type: 'text',
-			placeholder: 'Search conversations...',
+			placeholder: t().ui.searchConversations,
 		});
 
 		// Conversation list
@@ -677,7 +722,7 @@ export class IFlowChatView extends ItemView {
 		if (todayConversations.length > 0) {
 			const groupLabel = listContainer.createDiv({
 				cls: 'iflow-conversation-group-label',
-				text: 'Today',
+				text: t().ui.today,
 			});
 
 			todayConversations.forEach(conv => {
@@ -688,7 +733,7 @@ export class IFlowChatView extends ItemView {
 		if (filteredConversations.length === 0) {
 			listContainer.createDiv({
 				cls: 'iflow-conversation-empty',
-				text: searchQuery ? 'No conversations found' : 'No conversations yet',
+				text: searchQuery ? t().ui.noConversationsFound : t().ui.noConversations,
 			});
 		}
 	}
@@ -706,7 +751,7 @@ export class IFlowChatView extends ItemView {
 		});
 
 		const meta = info.createDiv({ cls: 'iflow-conversation-item-meta' });
-		meta.createSpan({ text: `${conversation.messages.length} messages` });
+		meta.createSpan({ text: `${conversation.messages.length} ${t().ui.messages}` });
 
 		const time = item.createDiv({
 			cls: 'iflow-conversation-item-time',
@@ -735,18 +780,18 @@ export class IFlowChatView extends ItemView {
 		const diffMins = Math.floor(diffMs / 60000);
 		const diffHours = Math.floor(diffMs / 3600000);
 
-		if (diffMins < 1) return 'now';
-		if (diffMins < 60) return `${diffMins}m`;
-		if (diffHours < 24) return `${diffHours}h`;
+		if (diffMins < 1) return t().ui.now;
+		if (diffMins < 60) return format(t().ui.minutesAgo, { n: diffMins });
+		if (diffHours < 24) return format(t().ui.hoursAgo, { n: diffHours });
 		return date.toLocaleDateString();
 	}
 
 	private updateConversationMeta(meta: HTMLElement): void {
 		const current = this.conversationStore.getCurrentConversation();
 		if (current) {
-			meta.textContent = `${current.messages.length} messages`;
+			meta.textContent = `${current.messages.length} ${t().ui.messages}`;
 		} else {
-			meta.textContent = '0 messages';
+			meta.textContent = t().ui.noMessages;
 		}
 	}
 
@@ -909,7 +954,7 @@ export class IFlowChatView extends ItemView {
 		messageEl.dataset.id = id;
 
 		const roleEl = messageEl.createDiv({ cls: 'iflow-message-role' });
-		roleEl.textContent = role === 'user' ? 'You' : 'iFlow';
+		roleEl.textContent = role === 'user' ? t().roles.user : t().roles.assistant;
 
 		const contentEl = messageEl.createDiv({ cls: 'iflow-message-content' });
 		contentEl.innerHTML = this.formatMessage(content);
