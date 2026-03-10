@@ -70,6 +70,9 @@ export interface IFlowToolCall {
 	id: string;
 	name: string;
 	input: any;
+	status?: 'running' | 'completed' | 'error';
+	result?: any;
+	error?: string;
 }
 
 export interface SendMessageOptions {
@@ -576,13 +579,59 @@ export class IFlowService {
 				const update = notification.params?.update;
 				console.log('[iFlow] Update type:', update?.sessionUpdate);
 				if (update && typeof update === 'object') {
-					const content = this.extractContentFromUpdate(update);
-					if (content) {
-						console.log('[iFlow] Content:', content.substring(0, 100));
-						this.messageHandlers.forEach(handler => handler({
-							type: 'stream',
-							content,
-						}));
+
+					// Check for tool_use content type
+					const content = update.content;
+					if (content && typeof content === 'object') {
+						// Handle tool_use
+						if (content.type === 'tool_use') {
+							console.log('[iFlow] Tool use detected:', content.name);
+							this.messageHandlers.forEach(handler => handler({
+								type: 'tool',
+								data: {
+									id: content.id || content.tool_use_id || Date.now().toString(),
+									name: content.name,
+									input: content.input || content.arguments,
+									status: 'running',
+								} as IFlowToolCall,
+							}));
+						}
+						// Handle tool_result
+						else if (content.type === 'tool_result') {
+							console.log('[iFlow] Tool result:', content.tool_use_id);
+							this.messageHandlers.forEach(handler => handler({
+								type: 'tool',
+								data: {
+									id: content.tool_use_id || content.id,
+									name: content.tool_name || 'unknown',
+									input: {},
+									status: content.error ? 'error' : 'completed',
+									result: content.result || content.content,
+									error: content.error,
+								} as IFlowToolCall,
+							}));
+						}
+						// Handle text content (default)
+						else {
+							const textContent = this.extractContentFromUpdate(update);
+							if (textContent) {
+								console.log('[iFlow] Content:', textContent.substring(0, 100));
+								this.messageHandlers.forEach(handler => handler({
+									type: 'stream',
+									content: textContent,
+								}));
+							}
+						}
+					} else {
+						// Legacy content handling
+						const textContent = this.extractContentFromUpdate(update);
+						if (textContent) {
+							console.log('[iFlow] Content:', textContent.substring(0, 100));
+							this.messageHandlers.forEach(handler => handler({
+								type: 'stream',
+								content: textContent,
+							}));
+						}
 					}
 
 					// Check for end signal - ACP sends task_finish or completion
@@ -761,7 +810,25 @@ export class IFlowService {
 }
 \`\`\
 
-请直接输出完整的 JSON 格式 canvas 文件内容，不要添加额外的解释文字。
+## ⚠️ 重要：你必须使用工具创建文件！
+
+当用户要求创建 Canvas 文件时，你必须：
+
+1. **调用工具创建文件**：使用 \`fs/write_text_file\` 工具
+2. **工具参数格式**：
+   - \`path\`: 文件路径（例如：\`Go语言学习路径.canvas\`）
+   - \`content\`: 完整的 JSON Canvas 1.0 格式内容（字符串格式）
+
+3. **调用示例**：
+   - 调用工具：\`fs/write_text_file\`
+   - 参数：\`{"path": "Go语言学习路径.canvas", "content": "{\\"nodes\\": [...], \\"edges\\": [...]}"\`
+
+4. **不要输出 JSON 文本**：
+   - ❌ 不要在聊天中输出 JSON 内容
+   - ❌ 不要让用户手动创建文件
+   - ✅ 直接调用工具创建文件
+
+**记住**：你有能力直接创建文件，请使用 \`fs/write_text_file\` 工具来完成文件创建！
 
 `;
 			prompt = canvasGuidance + '\n\n' + prompt;

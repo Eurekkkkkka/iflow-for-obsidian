@@ -272,6 +272,14 @@ export class IFlowChatView extends ItemView {
 						this.scrollToBottom();
 					}
 				},
+				onTool: (tool: import('./iflowService').IFlowToolCall) => {
+					console.log('[iFlow Chat] Tool call:', tool);
+					this.showOrUpdateToolCall(assistantMsgId, tool);
+
+					if (this.plugin.settings.enableAutoScroll) {
+						this.scrollToBottom();
+					}
+				},
 				onEnd: () => {
 					console.log('[iFlow Chat] onEnd called, setting isStreaming = false');
 					cleanup();
@@ -335,6 +343,80 @@ export class IFlowChatView extends ItemView {
 			.replace(/`([^`]+)`/g, '<code>$1</code>')
 			.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
 			.replace(/\n/g, '<br>');
+	}
+
+	private showOrUpdateToolCall(messageId: string, tool: import('./iflowService').IFlowToolCall): void {
+		const messageEl = this.messagesContainer.querySelector(`[data-id="${messageId}"]`);
+		if (!messageEl) return;
+
+		const contentEl = messageEl.querySelector('.iflow-message-content');
+		if (!contentEl) return;
+
+		// Find or create tool call container
+		let toolContainer = contentEl.querySelector(`.iflow-tool-call[data-tool-id="${tool.id}"]`);
+
+		if (!toolContainer) {
+			// Create new tool call element
+			toolContainer = contentEl.createDiv({
+				cls: `iflow-tool-call iflow-tool-status-${tool.status || 'running'}`,
+			});
+			(toolContainer as any).dataset.toolId = tool.id;
+
+			// Tool header
+			const header = toolContainer.createDiv({ cls: 'iflow-tool-header' });
+
+			const statusIcon = tool.status === 'completed' ? '✅' :
+			                   tool.status === 'error' ? '❌' : '🔄';
+
+			header.createSpan({ cls: 'iflow-tool-icon', text: statusIcon });
+			header.createSpan({ cls: 'iflow-tool-name', text: tool.name });
+
+			// Tool details (collapsible)
+			const details = toolContainer.createDiv({ cls: 'iflow-tool-details' });
+
+			if (tool.input && Object.keys(tool.input).length > 0) {
+				details.createDiv({ cls: 'iflow-tool-section-title', text: '参数：' });
+				const inputPre = details.createEl('pre', { cls: 'iflow-tool-input' });
+				inputPre.createEl('code', { text: JSON.stringify(tool.input, null, 2) });
+			}
+		} else {
+			// Update existing tool call
+			toolContainer.className = `iflow-tool-call iflow-tool-status-${tool.status || 'running'}`;
+
+			const iconEl = toolContainer.querySelector('.iflow-tool-icon');
+			if (iconEl) {
+				iconEl.textContent = tool.status === 'completed' ? '✅' :
+				                    tool.status === 'error' ? '❌' : '🔄';
+			}
+
+			// Add result if completed
+			if (tool.status === 'completed' && tool.result) {
+				let resultEl = toolContainer.querySelector('.iflow-tool-result');
+				if (!resultEl) {
+					const details = toolContainer.querySelector('.iflow-tool-details');
+					if (details) {
+						details.createDiv({ cls: 'iflow-tool-section-title', text: '结果：' });
+						resultEl = details.createEl('pre', { cls: 'iflow-tool-result' });
+						const resultText = typeof tool.result === 'string'
+							? tool.result
+							: JSON.stringify(tool.result, null, 2);
+						resultEl.createEl('code', { text: resultText });
+					}
+				}
+			}
+
+			// Add error if failed
+			if (tool.status === 'error' && tool.error) {
+				let errorEl = toolContainer.querySelector('.iflow-tool-error');
+				if (!errorEl) {
+					const details = toolContainer.querySelector('.iflow-tool-details');
+					if (details) {
+						errorEl = details.createDiv({ cls: 'iflow-tool-error' });
+						errorEl.createSpan({ text: `❌ 错误: ${tool.error}` });
+					}
+				}
+			}
+		}
 	}
 
 	private scrollToBottom(): void {
