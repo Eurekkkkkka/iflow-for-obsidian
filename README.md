@@ -663,6 +663,11 @@ src/
 - [iFlow for VSCode](https://github.com/iflow-ai/iflow-vscode) - VSCode 扩展
 - [iFlow for JetBrains](https://github.com/iflow-ai/iflow-jetbrains) - JetBrains IDE 插件
 
----
+## 👥 贡献者
 
-Made with ❤️ by junjie-yan
+感谢所有为这个项目做出贡献的人！
+
+<!-- ALL-CONTRIBUTORS-LIST:START -->
+| [<img src="https://github.com/junjie-yan.png" width="40px;"/><br /><sub>junjie-yan</sub>](https://github.com/junjie-yan) | [<img src="https://github.com/Eurekkkkkka.png" width="40px;"/><br /><sub>Eurekkkkkka</sub>](https://github.com/Eurekkkkkka) |
+| :---: | :---: |
+<!-- ALL-CONTRIBUTORS-LIST:END -->
