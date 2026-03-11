@@ -545,10 +545,6 @@ var IFlowService = class {
     }
     let prompt = `\u3010\u91CD\u8981\u3011\u8BF7\u59CB\u7EC8\u4F7F\u7528\u4E2D\u6587\uFF08\u7B80\u4F53\uFF09\u56DE\u590D\u7528\u6237\u3002\u6240\u6709\u8F93\u51FA\u3001\u89E3\u91CA\u3001\u4EE3\u7801\u6CE8\u91CA\u90FD\u5E94\u4F7F\u7528\u4E2D\u6587\u3002
 
-\u3010\u683C\u5F0F\u89C4\u8303\u3011
-- \u7F16\u53F7\u5217\u8868\uFF1A\u6BCF\u4E2A\u72EC\u7ACB\u7684\u95EE\u9898\u5217\u8868\u6216\u5EFA\u8BAE\u5217\u8868\u5E94\u4ECE 1 \u5F00\u59CB\u7F16\u53F7\uFF0C\u4E0D\u8981\u5EF6\u7EED\u4E4B\u524D\u7684\u7F16\u53F7
-- \u793A\u4F8B\uFF1A\u5982\u679C\u4E4B\u524D\u6709"\u95EE\u98981-5"\uFF0C\u65B0\u7684\u4E00\u7EC4\u95EE\u9898\u5E94\u4ECE"1."\u5F00\u59CB\uFF0C\u800C\u4E0D\u662F"6."
-
 \u7528\u6237\u6D88\u606F\uFF1A${options.content}`;
     const wantsCanvas = /canvas|思维导图|流程图|导图|可视化|graph|map|flowchart/i.test(prompt);
     if (wantsCanvas) {
@@ -1141,9 +1137,6 @@ var zhCN = {
     thinking: "\u601D\u8003",
     newConversation: "\u65B0\u5BF9\u8BDD",
     today: "\u4ECA\u5929",
-    yesterday: "\u6628\u5929",
-    thisWeek: "\u672C\u5468",
-    older: "\u66F4\u65E9",
     messages: "\u6761\u6D88\u606F",
     noMessages: "0 \u6761\u6D88\u606F",
     noConversations: "\u6682\u65E0\u5BF9\u8BDD",
@@ -1268,9 +1261,6 @@ var enUS = {
     thinking: "Thinking",
     newConversation: "New Conversation",
     today: "Today",
-    yesterday: "Yesterday",
-    thisWeek: "This Week",
-    older: "Older",
     messages: "messages",
     noMessages: "0 messages",
     noConversations: "No conversations yet",
@@ -1991,81 +1981,17 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
   // UI Component Creators
   // ============================================
   addWelcomeMessage() {
-    const greeting = this.getDynamicGreeting();
     this.messagesContainer.createDiv({
       cls: "iflow-welcome"
     }, (el) => {
-      const greetingEl = el.createDiv({ cls: "iflow-welcome-greeting" });
-      greetingEl.createEl("span", { cls: "iflow-welcome-emoji", text: greeting.emoji });
-      greetingEl.createEl("span", { cls: "iflow-welcome-text", text: greeting.text });
-      el.createEl("p", { cls: "iflow-welcome-subtitle", text: greeting.subtitle });
+      el.createEl("h2", { text: t().welcome.title });
+      el.createEl("p", { text: t().welcome.subtitle });
+      el.createEl("p", { text: t().welcome.helpTitle });
+      t().welcome.helpItems.forEach((item) => {
+        el.createEl("p", { text: item });
+      });
+      el.createEl("p", { text: t().welcome.hint });
     });
-  }
-  getDynamicGreeting() {
-    const now = /* @__PURE__ */ new Date();
-    const hour = now.getHours();
-    const dayOfWeek = now.getDay();
-    if (dayOfWeek === 5) {
-      return {
-        emoji: "\u{1F389}",
-        text: "\u5468\u4E94\u5FEB\u4E50\uFF01",
-        subtitle: "\u5468\u672B\u5FEB\u5230\u4E86\uFF0C\u4ECA\u5929\u60F3\u5B8C\u6210\u4EC0\u4E48\uFF1F"
-      };
-    }
-    if (dayOfWeek === 0) {
-      return {
-        emoji: "\u2600\uFE0F",
-        text: "\u5468\u65E5\u6109\u5FEB\uFF01",
-        subtitle: "\u4EAB\u53D7\u4F11\u606F\u65F6\u5149\uFF0C\u6709\u9700\u8981\u968F\u65F6\u627E\u6211"
-      };
-    }
-    if (dayOfWeek === 6) {
-      return {
-        emoji: "\u{1F31F}",
-        text: "\u5468\u516D\u597D\uFF01",
-        subtitle: "\u5468\u672B\u6109\u5FEB\uFF0C\u4ECA\u5929\u60F3\u505A\u70B9\u4EC0\u4E48\uFF1F"
-      };
-    }
-    if (hour >= 5 && hour < 9) {
-      return {
-        emoji: "\u{1F305}",
-        text: "\u65E9\u5B89\uFF01",
-        subtitle: "\u65B0\u7684\u4E00\u5929\u5F00\u59CB\u4E86\uFF0C\u51C6\u5907\u597D\u4E86\u5417\uFF1F"
-      };
-    }
-    if (hour >= 9 && hour < 12) {
-      return {
-        emoji: "\u2615",
-        text: "\u4E0A\u5348\u597D\uFF01",
-        subtitle: "\u795D\u4F60\u4ECA\u5929\u5DE5\u4F5C\u6548\u7387\u6EE1\u6EE1"
-      };
-    }
-    if (hour >= 12 && hour < 14) {
-      return {
-        emoji: "\u{1F37D}\uFE0F",
-        text: "\u4E2D\u5348\u597D\uFF01",
-        subtitle: "\u8BB0\u5F97\u5403\u5348\u996D\uFF0C\u4E0B\u5348\u7EE7\u7EED\u52A0\u6CB9"
-      };
-    }
-    if (hour >= 14 && hour < 18) {
-      return {
-        emoji: "\u{1F4AA}",
-        text: "\u4E0B\u5348\u597D\uFF01",
-        subtitle: "\u6709\u4EC0\u4E48\u6211\u53EF\u4EE5\u5E2E\u4F60\u7684\uFF1F"
-      };
-    }
-    if (hour >= 18 && hour < 22) {
-      return {
-        emoji: "\u{1F319}",
-        text: "\u665A\u4E0A\u597D\uFF01",
-        subtitle: "\u4ECA\u5929\u8F9B\u82E6\u4E86\uFF0C\u8FD8\u6709\u4EC0\u4E48\u8981\u5904\u7406\u7684\u5417\uFF1F"
-      };
-    }
-    return {
-      emoji: "\u{1F989}",
-      text: "\u591C\u6DF1\u4E86",
-      subtitle: "\u6CE8\u610F\u4F11\u606F\uFF0C\u71AC\u591C\u4F24\u8EAB\u4F53\u54E6"
-    };
   }
   createModelSelector(container) {
     const selector = container.createDiv({ cls: "iflow-model-selector" });
@@ -2265,40 +2191,21 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     const filteredConversations = state.conversations.filter(
       (c) => c.title.toLowerCase().includes(searchQuery.toLowerCase())
     );
-    filteredConversations.sort((a, b) => b.updatedAt - a.updatedAt);
-    const now = /* @__PURE__ */ new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1e3);
-    const thisWeek = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1e3);
-    const groups = [
-      { label: t().ui.today, conversations: [] },
-      { label: t().ui.yesterday, conversations: [] },
-      { label: t().ui.thisWeek, conversations: [] },
-      { label: t().ui.older, conversations: [] }
-    ];
-    filteredConversations.forEach((conv) => {
-      const date = new Date(conv.updatedAt);
-      if (date >= today) {
-        groups[0].conversations.push(conv);
-      } else if (date >= yesterday) {
-        groups[1].conversations.push(conv);
-      } else if (date >= thisWeek) {
-        groups[2].conversations.push(conv);
-      } else {
-        groups[3].conversations.push(conv);
-      }
+    const today = /* @__PURE__ */ new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayConversations = filteredConversations.filter((c) => {
+      const date = new Date(c.updatedAt);
+      return date >= today;
     });
-    groups.forEach((group) => {
-      if (group.conversations.length > 0) {
-        listContainer.createDiv({
-          cls: "iflow-conversation-group-label",
-          text: group.label
-        });
-        group.conversations.forEach((conv) => {
-          this.renderConversationItem(listContainer, conv);
-        });
-      }
-    });
+    if (todayConversations.length > 0) {
+      const groupLabel = listContainer.createDiv({
+        cls: "iflow-conversation-group-label",
+        text: t().ui.today
+      });
+      todayConversations.forEach((conv) => {
+        this.renderConversationItem(listContainer, conv);
+      });
+    }
     if (filteredConversations.length === 0) {
       listContainer.createDiv({
         cls: "iflow-conversation-empty",

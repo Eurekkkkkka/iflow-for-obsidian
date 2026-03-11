@@ -847,17 +847,102 @@ export class IFlowChatView extends ItemView {
 	// ============================================
 
 	private addWelcomeMessage(): void {
+		// Generate dynamic greeting based on time
+		const greeting = this.getDynamicGreeting();
+
 		this.messagesContainer.createDiv({
 			cls: 'iflow-welcome',
 		}, (el) => {
-			el.createEl('h2', { text: t().welcome.title });
-			el.createEl('p', { text: t().welcome.subtitle });
-			el.createEl('p', { text: t().welcome.helpTitle });
-			t().welcome.helpItems.forEach(item => {
-				el.createEl('p', { text: item });
-			});
-			el.createEl('p', { text: t().welcome.hint });
+			// Greeting text with nice styling
+			const greetingEl = el.createDiv({ cls: 'iflow-welcome-greeting' });
+			greetingEl.createEl('span', { cls: 'iflow-welcome-emoji', text: greeting.emoji });
+			greetingEl.createEl('span', { cls: 'iflow-welcome-text', text: greeting.text });
+
+			// Subtitle
+			el.createEl('p', { cls: 'iflow-welcome-subtitle', text: greeting.subtitle });
 		});
+	}
+
+	private getDynamicGreeting(): { emoji: string; text: string; subtitle: string } {
+		const now = new Date();
+		const hour = now.getHours();
+		const dayOfWeek = now.getDay(); // 0 = Sunday, 6 = Saturday
+
+		// Special day greetings
+		if (dayOfWeek === 5) {
+			// Friday
+			return {
+				emoji: '🎉',
+				text: '周五快乐！',
+				subtitle: '周末快到了，今天想完成什么？'
+			};
+		}
+
+		if (dayOfWeek === 0) {
+			// Sunday
+			return {
+				emoji: '☀️',
+				text: '周日愉快！',
+				subtitle: '享受休息时光，有需要随时找我'
+			};
+		}
+
+		if (dayOfWeek === 6) {
+			// Saturday
+			return {
+				emoji: '🌟',
+				text: '周六好！',
+				subtitle: '周末愉快，今天想做点什么？'
+			};
+		}
+
+		// Time-based greetings for weekdays
+		if (hour >= 5 && hour < 9) {
+			return {
+				emoji: '🌅',
+				text: '早安！',
+				subtitle: '新的一天开始了，准备好了吗？'
+			};
+		}
+
+		if (hour >= 9 && hour < 12) {
+			return {
+				emoji: '☕',
+				text: '上午好！',
+				subtitle: '祝你今天工作效率满满'
+			};
+		}
+
+		if (hour >= 12 && hour < 14) {
+			return {
+				emoji: '🍽️',
+				text: '中午好！',
+				subtitle: '记得吃午饭，下午继续加油'
+			};
+		}
+
+		if (hour >= 14 && hour < 18) {
+			return {
+				emoji: '💪',
+				text: '下午好！',
+				subtitle: '有什么我可以帮你的？'
+			};
+		}
+
+		if (hour >= 18 && hour < 22) {
+			return {
+				emoji: '🌙',
+				text: '晚上好！',
+				subtitle: '今天辛苦了，还有什么要处理的吗？'
+			};
+		}
+
+		// Late night
+		return {
+			emoji: '🦉',
+			text: '夜深了',
+			subtitle: '注意休息，熬夜伤身体哦'
+		};
 	}
 
 	private createModelSelector(container: HTMLElement): HTMLElement {
@@ -1131,25 +1216,48 @@ export class IFlowChatView extends ItemView {
 			c.title.toLowerCase().includes(searchQuery.toLowerCase())
 		);
 
-		// Group conversations by date
-		const today = new Date();
-		today.setHours(0, 0, 0, 0);
+		// Sort by update time (newest first)
+		filteredConversations.sort((a, b) => b.updatedAt - a.updatedAt);
 
-		const todayConversations = filteredConversations.filter(c => {
-			const date = new Date(c.updatedAt);
-			return date >= today;
+		// Group conversations by date
+		const now = new Date();
+		const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+		const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+		const thisWeek = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+		const groups: { label: string; conversations: Conversation[] }[] = [
+			{ label: t().ui.today, conversations: [] },
+			{ label: t().ui.yesterday, conversations: [] },
+			{ label: t().ui.thisWeek, conversations: [] },
+			{ label: t().ui.older, conversations: [] },
+		];
+
+		filteredConversations.forEach(conv => {
+			const date = new Date(conv.updatedAt);
+			if (date >= today) {
+				groups[0].conversations.push(conv);
+			} else if (date >= yesterday) {
+				groups[1].conversations.push(conv);
+			} else if (date >= thisWeek) {
+				groups[2].conversations.push(conv);
+			} else {
+				groups[3].conversations.push(conv);
+			}
 		});
 
-		if (todayConversations.length > 0) {
-			const groupLabel = listContainer.createDiv({
-				cls: 'iflow-conversation-group-label',
-				text: t().ui.today,
-			});
+		// Render each group
+		groups.forEach(group => {
+			if (group.conversations.length > 0) {
+				listContainer.createDiv({
+					cls: 'iflow-conversation-group-label',
+					text: group.label,
+				});
 
-			todayConversations.forEach(conv => {
-				this.renderConversationItem(listContainer, conv);
-			});
-		}
+				group.conversations.forEach(conv => {
+					this.renderConversationItem(listContainer, conv);
+				});
+			}
+		});
 
 		if (filteredConversations.length === 0) {
 			listContainer.createDiv({
