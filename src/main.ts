@@ -1,7 +1,12 @@
 import { App, Plugin, PluginSettingTab, Setting, Notice, WorkspaceLeaf, TFile, MarkdownView } from 'obsidian';
 import { IFlowService } from './iflowService';
 import { IFlowChatView, VIEW_TYPE_IFLOW_CHAT } from './chatView';
-import { initI18n, t, setLanguage, getCurrentLangCode } from './i18n';
+import { initI18n, t } from './i18n';
+
+// Import Node.js modules for process management (Electron environment)
+declare const require: (module: string) => any;
+const { spawn } = require('child_process');
+const path = require('path');
 
 export { IFlowPlugin };
 export type { IFlowSettings };
@@ -16,6 +21,7 @@ interface IFlowSettings {
 	lastUsedModel: string;
 	lastUsedMode: string;
 	lastUsedThinking: boolean;
+	autoStartSdk: boolean;  // Auto-start iFlow SDK on plugin load
 }
 
 const DEFAULT_SETTINGS: IFlowSettings = {
@@ -28,12 +34,14 @@ const DEFAULT_SETTINGS: IFlowSettings = {
 	lastUsedModel: 'glm-4.7',
 	lastUsedMode: 'default',
 	lastUsedThinking: false,
+	autoStartSdk: true,  // Enabled by default
 }
 
 export default class IFlowPlugin extends Plugin {
 	settings: IFlowSettings;
 	iflowService: IFlowService;
 	chatView: IFlowChatView | null = null;
+	sdkProcess: any = null;  // Keep reference to SDK process
 
 	async onload() {
 		console.log('Loading iFlow for Obsidian plugin');
@@ -83,18 +91,124 @@ export default class IFlowPlugin extends Plugin {
 			},
 		});
 
+		// Add command to start/restart SDK
+		this.addCommand({
+			id: 'restart-iflow-sdk',
+			name: '重启 iFlow SDK',
+			callback: () => this.ensureSdkRunning(true),
+		});
+
 		// Add settings tab
 		this.addSettingTab(new IFlowSettingTab(this.app, this));
 
 		// Auto-open chat view on load if previously open
-		this.app.workspace.onLayoutReady(() => {
+		this.app.workspace.onLayoutReady(async () => {
+			// Check and auto-start SDK if needed
+			if (this.settings.autoStartSdk) {
+				await this.ensureSdkRunning();
+			}
 			this.activateView();
+		});
+	}
+
+	/**
+	 * Ensure iFlow SDK is running, start it if not
+	 */
+	async ensureSdkRunning(forceRestart: boolean = false): Promise<boolean> {
+		const port = this.settings.iflowPort;
+
+		// First check if SDK is already running
+		const isConnected = await this.iflowService.checkConnection();
+		
+		if (isConnected && !forceRestart) {
+			console.log('[iFlow] SDK already running on port', port);
+			return true;
+		}
+
+		// Show notification that we're starting SDK
+		new Notice('正在启动 iFlow SDK...');
+
+		// Start SDK
+		const started = await this.startSdk();
+		
+		if (started) {
+			new Notice('iFlow SDK 启动成功！');
+		} else {
+			new Notice('iFlow SDK 启动失败，请检查是否已安装 iflow CLI');
+		}
+
+		return started;
+	}
+
+	/**
+	 * Start iFlow SDK process
+	 */
+	async startSdk(): Promise<boolean> {
+		const port = this.settings.iflowPort;
+		
+		return new Promise((resolve) => {
+			try {
+				console.log('[iFlow] Starting SDK on port', port);
+				
+				// Determine the command based on platform
+				const isWindows = process.platform === 'win32';
+				
+				// Start iflow in ACP mode
+				// On Windows, use cmd.exe to run the iflow command
+				// On Unix, use shell directly
+				if (isWindows) {
+					this.sdkProcess = spawn('cmd.exe', [
+						'/c',
+						`iflow --experimental-acp --port ${port} --stream`
+					], {
+						detached: true,
+						shell: false,
+						windowsHide: true,
+					});
+				} else {
+					this.sdkProcess = spawn('iflow', [
+						'--experimental-acp',
+						'--port', String(port),
+						'--stream'
+					], {
+						detached: true,
+					});
+				}
+
+				// Handle process events
+				this.sdkProcess.on('error', (err: Error) => {
+					console.error('[iFlow] SDK process error:', err);
+					resolve(false);
+				});
+
+				this.sdkProcess.stdout?.on('data', (data: Buffer) => {
+					console.log('[iFlow SDK]', data.toString());
+				});
+
+				this.sdkProcess.stderr?.on('data', (data: Buffer) => {
+					console.error('[iFlow SDK Error]', data.toString());
+				});
+
+				// Wait a bit for the server to start, then check connection
+				setTimeout(async () => {
+					const connected = await this.iflowService.checkConnection();
+					resolve(connected);
+				}, 3000);
+
+			} catch (error) {
+				console.error('[iFlow] Failed to start SDK:', error);
+				resolve(false);
+			}
 		});
 	}
 
 	onunload() {
 		console.log('Unloading iFlow for Obsidian plugin');
 		this.iflowService.dispose();
+		
+		// Note: We don't kill the SDK process on unload
+		// because it's started as a detached process
+		// This allows the SDK to keep running even if Obsidian is closed
 	}
 
 	async activateView() {
@@ -161,9 +275,39 @@ class IFlowSettingTab extends PluginSettingTab {
 				.onChange(async (value) => {
 					this.plugin.settings.language = value;
 					await this.plugin.saveSettings();
-					setLanguage(value);
+					initI18n(value);
 					// Refresh settings page to apply new language
 					this.display();
+				}));
+
+		// Auto-start SDK setting
+		new Setting(containerEl)
+			.setName('自动启动 SDK')
+			.setDesc('插件加载时自动启动 iFlow SDK（推荐开启）')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.autoStartSdk)
+				.onChange(async (value) => {
+					this.plugin.settings.autoStartSdk = value;
+					await this.plugin.saveSettings();
+				}));
+
+		// Manual SDK restart button
+		new Setting(containerEl)
+			.setName('重启 SDK')
+			.setDesc('手动重启 iFlow SDK 服务')
+			.addButton(button => button
+				.setButtonText('重启')
+				.onClick(async () => {
+					button.setButtonText('启动中...');
+					button.setDisabled(true);
+					const success = await this.plugin.startSdk();
+					button.setButtonText('重启');
+					button.setDisabled(false);
+					if (success) {
+						new Notice('SDK 重启成功！');
+						// Refresh status
+						this.display();
+					}
 				}));
 
 		new Setting(containerEl)

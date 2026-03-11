@@ -147,6 +147,7 @@ var IFlowService = class {
     this.isConnected = false;
     this.protocol = null;
     this.sessionId = null;
+    this.handlerMap = /* @__PURE__ */ new Map();
     this.port = port;
     this.timeout = timeout;
     this.app = app;
@@ -629,23 +630,18 @@ ${options.selection}
       }
       prompt += `User message: ${options.content}`;
     }
-    const cleanup = () => {
-      this.off("stream", options.onChunk);
-      this.off("tool", options.onTool);
-      this.off("end", options.onEnd);
-      this.off("error", options.onError);
-    };
+    this.clearHandlers();
     if (options.onChunk) this.on("stream", options.onChunk);
     if (options.onTool) this.on("tool", options.onTool);
     if (options.onEnd) this.on("end", () => {
       var _a;
       (_a = options.onEnd) == null ? void 0 : _a.call(options);
-      cleanup();
+      this.clearHandlers();
     });
     if (options.onError) this.on("error", () => {
       var _a;
       (_a = options.onError) == null ? void 0 : _a.call(options, "Connection error");
-      cleanup();
+      this.clearHandlers();
     });
     const promptContent = [];
     if (options.images && options.images.length > 0) {
@@ -677,10 +673,14 @@ ${options.selection}
       }
     } catch (error) {
       new import_obsidian.Notice(`Failed to send message: ${error}`);
-      cleanup();
+      this.clearHandlers();
     }
   }
   on(type, handler) {
+    if (!this.handlerMap.has(type)) {
+      this.handlerMap.set(type, /* @__PURE__ */ new Set());
+    }
+    this.handlerMap.get(type).add(handler);
     this.messageHandlers.push((msg) => {
       if (msg.type === type) {
         handler(msg.content || msg.data);
@@ -688,7 +688,21 @@ ${options.selection}
     });
   }
   off(type, handler) {
-    this.messageHandlers = this.messageHandlers.filter((h) => h !== handler);
+    const handlers = this.handlerMap.get(type);
+    if (handlers) {
+      handlers.delete(handler);
+      if (handlers.size === 0) {
+        this.handlerMap.delete(type);
+      }
+    }
+    this.messageHandlers = this.messageHandlers.filter((h) => {
+      const typeHandlers = this.handlerMap.get(type);
+      return typeHandlers ? true : true;
+    });
+  }
+  clearHandlers() {
+    this.messageHandlers = [];
+    this.handlerMap.clear();
   }
   updateConfig(port, timeout) {
     const portChanged = this.port !== port;
@@ -728,10 +742,10 @@ var ConversationStore = class {
     this.state = this.load();
   }
   // 生成 vault path 的哈希值用于存储 key
-  hashVaultPath(path) {
+  hashVaultPath(path2) {
     let hash = 0;
-    for (let i = 0; i < path.length; i++) {
-      const char = path.charCodeAt(i);
+    for (let i = 0; i < path2.length; i++) {
+      const char = path2.charCodeAt(i);
       hash = (hash << 5) - hash + char;
       hash = hash & hash;
     }
@@ -1341,7 +1355,6 @@ var languages = {
   // alias for en-US
 };
 var currentLang = zhCN;
-var currentLangCode = "zh-CN";
 function detectLanguage() {
   var _a;
   if (typeof window !== "undefined" && ((_a = window.obsidian) == null ? void 0 : _a.locale)) {
@@ -1357,25 +1370,14 @@ function initI18n(langCode) {
   const code = langCode || detectLanguage();
   if (languages[code]) {
     currentLang = languages[code];
-    currentLangCode = code;
     return;
   }
   const baseLang = code.split("-")[0];
   if (languages[baseLang]) {
     currentLang = languages[baseLang];
-    currentLangCode = baseLang;
     return;
   }
   currentLang = zhCN;
-  currentLangCode = "zh-CN";
-}
-function setLanguage(langCode) {
-  if (languages[langCode]) {
-    currentLang = languages[langCode];
-    currentLangCode = langCode;
-    return true;
-  }
-  return false;
 }
 function t() {
   return currentLang;
@@ -1762,6 +1764,7 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     const assistantMsgId = this.addMessage("assistant", "");
     this.currentMessage = "";
     this.isStreaming = true;
+    this.showLoadingAnimation(assistantMsgId);
     console.log("[iFlow Chat] Starting streaming", {
       userMsgId,
       assistantMsgId,
@@ -1793,6 +1796,9 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
         mode: this.currentMode,
         thinkingEnabled: this.thinkingEnabled,
         onChunk: (chunk) => {
+          if (!this.currentMessage) {
+            this.hideLoadingAnimation(assistantMsgId);
+          }
           this.currentMessage += chunk;
           this.updateMessage(assistantMsgId, this.currentMessage);
           if (this.plugin.settings.enableAutoScroll) {
@@ -1852,7 +1858,65 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     }
   }
   formatMessage(content) {
-    return content.replace(/```(\w+)?\n([\s\S]*?)```/g, "<pre><code>$2</code></pre>").replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>").replace(/\n/g, "<br>");
+    let result = content.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
+      const langClass = lang ? `language-${lang}` : "";
+      return `<pre class="iflow-code-block ${langClass}"><code>${this.escapeHtml(code.trim())}</code></pre>`;
+    });
+    result = result.replace(/`([^`]+)`/g, '<code class="iflow-inline-code">$1</code>');
+    result = result.replace(/\*\*([^*]+)\*\*/g, '<strong class="iflow-bold">$1</strong>');
+    result = result.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+    result = result.replace(/^\*\s*(Thinking.+)$/gm, '<div class="iflow-thinking">$1</div>');
+    result = result.replace(/^### (.+)$/gm, '<h4 class="iflow-h4">$1</h4>');
+    result = result.replace(/^## (.+)$/gm, '<h3 class="iflow-h3">$1</h3>');
+    result = result.replace(/^# (.+)$/gm, '<h2 class="iflow-h2">$1</h2>');
+    result = result.replace(/^(\s*)[-*]\s+(.+)$/gm, (match, spaces, text) => {
+      const indent = spaces.length;
+      return `<li class="iflow-li" style="margin-left: ${indent * 8}px">${text}</li>`;
+    });
+    result = result.replace(/^(\s*)(\d+)\.\s+(.+)$/gm, (match, spaces, num, text) => {
+      const indent = spaces.length;
+      return `<li class="iflow-li iflow-li-num" style="margin-left: ${indent * 8}px">${text}</li>`;
+    });
+    result = result.replace(/✅/g, '<span class="iflow-icon iflow-icon-success">\u2705</span>');
+    result = result.replace(/❌/g, '<span class="iflow-icon iflow-icon-error">\u274C</span>');
+    result = result.replace(/🔄/g, '<span class="iflow-icon iflow-icon-loading">\u{1F504}</span>');
+    result = result.replace(/◆/g, '<span class="iflow-icon iflow-icon-diamond">\u25C6</span>');
+    result = result.replace(
+      /([a-zA-Z0-9_\-/.]+\.(ts|js|tsx|jsx|py|md|json|yaml|yml|css|html))/g,
+      '<span class="iflow-file-path">$1</span>'
+    );
+    result = result.replace(/`([A-Za-z]+\+[A-Za-z+]+)`/g, '<kbd class="iflow-kbd">$1</kbd>');
+    result = result.replace(/\n/g, "<br>");
+    result = result.replace(/<\/(h[234]|pre|div|li)><br>/g, "</$1>");
+    result = result.replace(/<br><(h[234]|pre|div|li)/g, "<$1");
+    return result;
+  }
+  escapeHtml(text) {
+    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  }
+  showLoadingAnimation(messageId) {
+    const messageEl = this.messagesContainer.querySelector(`[data-id="${messageId}"]`);
+    if (!messageEl) return;
+    const contentEl = messageEl.querySelector(".iflow-message-content");
+    if (!contentEl) return;
+    contentEl.innerHTML = `
+			<div class="iflow-loading">
+				<div class="iflow-loading-dots">
+					<span></span>
+					<span></span>
+					<span></span>
+				</div>
+				<span class="iflow-loading-text">\u601D\u8003\u4E2D...</span>
+			</div>
+		`;
+  }
+  hideLoadingAnimation(messageId) {
+    const messageEl = this.messagesContainer.querySelector(`[data-id="${messageId}"]`);
+    if (!messageEl) return;
+    const loadingEl = messageEl.querySelector(".iflow-loading");
+    if (loadingEl) {
+      loadingEl.remove();
+    }
   }
   showOrUpdateToolCall(messageId, tool) {
     const messageEl = this.messagesContainer.querySelector(`[data-id="${messageId}"]`);
@@ -2316,6 +2380,8 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
 };
 
 // src/main.ts
+var { spawn } = require("child_process");
+var path = require("path");
 var DEFAULT_SETTINGS = {
   iflowPort: 8090,
   iflowTimeout: 6e4,
@@ -2325,13 +2391,17 @@ var DEFAULT_SETTINGS = {
   autoAttachFile: true,
   lastUsedModel: "glm-4.7",
   lastUsedMode: "default",
-  lastUsedThinking: false
+  lastUsedThinking: false,
+  autoStartSdk: true
+  // Enabled by default
 };
 var IFlowPlugin = class extends import_obsidian3.Plugin {
   constructor() {
     super(...arguments);
     this.chatView = null;
+    this.sdkProcess = null;
   }
+  // Keep reference to SDK process
   async onload() {
     console.log("Loading iFlow for Obsidian plugin");
     await this.loadSettings();
@@ -2365,9 +2435,85 @@ var IFlowPlugin = class extends import_obsidian3.Plugin {
         return false;
       }
     });
+    this.addCommand({
+      id: "restart-iflow-sdk",
+      name: "\u91CD\u542F iFlow SDK",
+      callback: () => this.ensureSdkRunning(true)
+    });
     this.addSettingTab(new IFlowSettingTab(this.app, this));
-    this.app.workspace.onLayoutReady(() => {
+    this.app.workspace.onLayoutReady(async () => {
+      if (this.settings.autoStartSdk) {
+        await this.ensureSdkRunning();
+      }
       this.activateView();
+    });
+  }
+  /**
+   * Ensure iFlow SDK is running, start it if not
+   */
+  async ensureSdkRunning(forceRestart = false) {
+    const port = this.settings.iflowPort;
+    const isConnected = await this.iflowService.checkConnection();
+    if (isConnected && !forceRestart) {
+      console.log("[iFlow] SDK already running on port", port);
+      return true;
+    }
+    new import_obsidian3.Notice("\u6B63\u5728\u542F\u52A8 iFlow SDK...");
+    const started = await this.startSdk();
+    if (started) {
+      new import_obsidian3.Notice("iFlow SDK \u542F\u52A8\u6210\u529F\uFF01");
+    } else {
+      new import_obsidian3.Notice("iFlow SDK \u542F\u52A8\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u662F\u5426\u5DF2\u5B89\u88C5 iflow CLI");
+    }
+    return started;
+  }
+  /**
+   * Start iFlow SDK process
+   */
+  async startSdk() {
+    const port = this.settings.iflowPort;
+    return new Promise((resolve) => {
+      var _a, _b;
+      try {
+        console.log("[iFlow] Starting SDK on port", port);
+        const isWindows = process.platform === "win32";
+        if (isWindows) {
+          this.sdkProcess = spawn("cmd.exe", [
+            "/c",
+            `iflow --experimental-acp --port ${port} --stream`
+          ], {
+            detached: true,
+            shell: false,
+            windowsHide: true
+          });
+        } else {
+          this.sdkProcess = spawn("iflow", [
+            "--experimental-acp",
+            "--port",
+            String(port),
+            "--stream"
+          ], {
+            detached: true
+          });
+        }
+        this.sdkProcess.on("error", (err) => {
+          console.error("[iFlow] SDK process error:", err);
+          resolve(false);
+        });
+        (_a = this.sdkProcess.stdout) == null ? void 0 : _a.on("data", (data) => {
+          console.log("[iFlow SDK]", data.toString());
+        });
+        (_b = this.sdkProcess.stderr) == null ? void 0 : _b.on("data", (data) => {
+          console.error("[iFlow SDK Error]", data.toString());
+        });
+        setTimeout(async () => {
+          const connected = await this.iflowService.checkConnection();
+          resolve(connected);
+        }, 3e3);
+      } catch (error) {
+        console.error("[iFlow] Failed to start SDK:", error);
+        resolve(false);
+      }
     });
   }
   onunload() {
@@ -2412,8 +2558,23 @@ var IFlowSettingTab = class extends import_obsidian3.PluginSettingTab {
     new import_obsidian3.Setting(containerEl).setName(settings.language).setDesc(settings.languageDesc).addDropdown((dropdown) => dropdown.addOption("zh-CN", "\u4E2D\u6587\u7B80\u4F53").addOption("en-US", "English").setValue(this.plugin.settings.language).onChange(async (value) => {
       this.plugin.settings.language = value;
       await this.plugin.saveSettings();
-      setLanguage(value);
+      initI18n(value);
       this.display();
+    }));
+    new import_obsidian3.Setting(containerEl).setName("\u81EA\u52A8\u542F\u52A8 SDK").setDesc("\u63D2\u4EF6\u52A0\u8F7D\u65F6\u81EA\u52A8\u542F\u52A8 iFlow SDK\uFF08\u63A8\u8350\u5F00\u542F\uFF09").addToggle((toggle) => toggle.setValue(this.plugin.settings.autoStartSdk).onChange(async (value) => {
+      this.plugin.settings.autoStartSdk = value;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian3.Setting(containerEl).setName("\u91CD\u542F SDK").setDesc("\u624B\u52A8\u91CD\u542F iFlow SDK \u670D\u52A1").addButton((button) => button.setButtonText("\u91CD\u542F").onClick(async () => {
+      button.setButtonText("\u542F\u52A8\u4E2D...");
+      button.setDisabled(true);
+      const success = await this.plugin.startSdk();
+      button.setButtonText("\u91CD\u542F");
+      button.setDisabled(false);
+      if (success) {
+        new import_obsidian3.Notice("SDK \u91CD\u542F\u6210\u529F\uFF01");
+        this.display();
+      }
     }));
     new import_obsidian3.Setting(containerEl).setName(settings.port).setDesc(settings.portDesc).addText((text) => text.setValue(String(this.plugin.settings.iflowPort)).onChange(async (value) => {
       const port = parseInt(value);

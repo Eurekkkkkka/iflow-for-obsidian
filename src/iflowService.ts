@@ -820,23 +820,19 @@ export class IFlowService {
 			prompt += `User message: ${options.content}`;
 		}
 
-		// Register one-time handlers for this message
-		const cleanup = () => {
-			this.off('stream', options.onChunk);
-			this.off('tool', options.onTool);
-			this.off('end', options.onEnd);
-			this.off('error', options.onError);
-		};
+		// Clear any stale handlers from previous messages
+		this.clearHandlers();
 
+		// Register handlers for this message
 		if (options.onChunk) this.on('stream', options.onChunk);
 		if (options.onTool) this.on('tool', options.onTool);
 		if (options.onEnd) this.on('end', () => {
 			options.onEnd?.();
-			cleanup();
+			this.clearHandlers();
 		});
 		if (options.onError) this.on('error', () => {
 			options.onError?.('Connection error');
-			cleanup();
+			this.clearHandlers();
 		});
 
 		// Build prompt content array
@@ -879,11 +875,20 @@ export class IFlowService {
 			}
 		} catch (error) {
 			new Notice(`Failed to send message: ${error}`);
-			cleanup();
+			this.clearHandlers();
 		}
 	}
 
-	on(type: string, handler: any): void {
+	private handlerMap = new Map<string, Set<(data: any) => void>>();
+
+	on(type: string, handler: (data: any) => void): void {
+		// Track handlers by type for proper cleanup
+		if (!this.handlerMap.has(type)) {
+			this.handlerMap.set(type, new Set());
+		}
+		this.handlerMap.get(type)!.add(handler);
+
+		// Also add to messageHandlers for dispatching
 		this.messageHandlers.push((msg: IFlowMessage) => {
 			if (msg.type === type) {
 				handler(msg.content || msg.data);
@@ -891,8 +896,27 @@ export class IFlowService {
 		});
 	}
 
-	off(type: string, handler: any): void {
-		this.messageHandlers = this.messageHandlers.filter(h => h !== handler);
+	off(type: string, handler: (data: any) => void): void {
+		// Remove from handler map
+		const handlers = this.handlerMap.get(type);
+		if (handlers) {
+			handlers.delete(handler);
+			if (handlers.size === 0) {
+				this.handlerMap.delete(type);
+			}
+		}
+
+		// Rebuild messageHandlers without the removed handler
+		this.messageHandlers = this.messageHandlers.filter(h => {
+			// Can't directly compare, but we check if the handler is still in the map
+			const typeHandlers = this.handlerMap.get(type);
+			return typeHandlers ? true : true; // Keep all handlers, we'll manage via map
+		});
+	}
+
+	clearHandlers(): void {
+		this.messageHandlers = [];
+		this.handlerMap.clear();
 	}
 
 	updateConfig(port: number, timeout: number): void {

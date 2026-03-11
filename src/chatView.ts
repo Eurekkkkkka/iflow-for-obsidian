@@ -533,10 +533,13 @@ export class IFlowChatView extends ItemView {
 			this.conversationStore.addUserMessage(this.currentConversationId, content);
 		}
 
-		// Add assistant message placeholder
+		// Add assistant message placeholder with loading state
 		const assistantMsgId = this.addMessage('assistant', '');
 		this.currentMessage = '';
 		this.isStreaming = true;
+		
+		// Show loading animation
+		this.showLoadingAnimation(assistantMsgId);
 
 		console.log('[iFlow Chat] Starting streaming', {
 			userMsgId,
@@ -577,6 +580,11 @@ export class IFlowChatView extends ItemView {
 				mode: this.currentMode,
 				thinkingEnabled: this.thinkingEnabled,
 				onChunk: (chunk: string) => {
+					// Hide loading on first chunk
+					if (!this.currentMessage) {
+						this.hideLoadingAnimation(assistantMsgId);
+					}
+					
 					this.currentMessage += chunk;
 					this.updateMessage(assistantMsgId, this.currentMessage);
 
@@ -649,12 +657,103 @@ export class IFlowChatView extends ItemView {
 	}
 
 	private formatMessage(content: string): string {
-		// Simple markdown formatting
-		return content
-			.replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
-			.replace(/`([^`]+)`/g, '<code>$1</code>')
-			.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-			.replace(/\n/g, '<br>');
+		// Enhanced markdown formatting with syntax highlighting
+		
+		// First handle code blocks (to prevent inner formatting)
+		let result = content.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
+			const langClass = lang ? `language-${lang}` : '';
+			return `<pre class="iflow-code-block ${langClass}"><code>${this.escapeHtml(code.trim())}</code></pre>`;
+		});
+		
+		// Handle inline code
+		result = result.replace(/`([^`]+)`/g, '<code class="iflow-inline-code">$1</code>');
+		
+		// Handle bold text
+		result = result.replace(/\*\*([^*]+)\*\*/g, '<strong class="iflow-bold">$1</strong>');
+		
+		// Handle italic text
+		result = result.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+		
+		// Handle thinking blocks (like * Thinking...)
+		result = result.replace(/^\*\s*(Thinking.+)$/gm, '<div class="iflow-thinking">$1</div>');
+		
+		// Handle headers
+		result = result.replace(/^### (.+)$/gm, '<h4 class="iflow-h4">$1</h4>');
+		result = result.replace(/^## (.+)$/gm, '<h3 class="iflow-h3">$1</h3>');
+		result = result.replace(/^# (.+)$/gm, '<h2 class="iflow-h2">$1</h2>');
+		
+		// Handle bullet points with proper nesting
+		result = result.replace(/^(\s*)[-*]\s+(.+)$/gm, (match, spaces, text) => {
+			const indent = spaces.length;
+			return `<li class="iflow-li" style="margin-left: ${indent * 8}px">${text}</li>`;
+		});
+		
+		// Handle numbered lists
+		result = result.replace(/^(\s*)(\d+)\.\s+(.+)$/gm, (match, spaces, num, text) => {
+			const indent = spaces.length;
+			return `<li class="iflow-li iflow-li-num" style="margin-left: ${indent * 8}px">${text}</li>`;
+		});
+		
+		// Handle checkmarks and status icons
+		result = result.replace(/✅/g, '<span class="iflow-icon iflow-icon-success">✅</span>');
+		result = result.replace(/❌/g, '<span class="iflow-icon iflow-icon-error">❌</span>');
+		result = result.replace(/🔄/g, '<span class="iflow-icon iflow-icon-loading">🔄</span>');
+		result = result.replace(/◆/g, '<span class="iflow-icon iflow-icon-diamond">◆</span>');
+		
+		// Handle file paths (highlight as code-like)
+		result = result.replace(/([a-zA-Z0-9_\-/.]+\.(ts|js|tsx|jsx|py|md|json|yaml|yml|css|html))/g, 
+			'<span class="iflow-file-path">$1</span>');
+		
+		// Handle keyboard shortcuts
+		result = result.replace(/`([A-Za-z]+\+[A-Za-z+]+)`/g, '<kbd class="iflow-kbd">$1</kbd>');
+		
+		// Convert newlines to <br> (but not after block elements)
+		result = result.replace(/\n/g, '<br>');
+		
+		// Clean up extra breaks after block elements
+		result = result.replace(/<\/(h[234]|pre|div|li)><br>/g, '</$1>');
+		result = result.replace(/<br><(h[234]|pre|div|li)/g, '<$1');
+		
+		return result;
+	}
+
+	private escapeHtml(text: string): string {
+		return text
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#039;');
+	}
+
+	private showLoadingAnimation(messageId: string): void {
+		const messageEl = this.messagesContainer.querySelector(`[data-id="${messageId}"]`);
+		if (!messageEl) return;
+
+		const contentEl = messageEl.querySelector('.iflow-message-content');
+		if (!contentEl) return;
+
+		// Create loading indicator
+		contentEl.innerHTML = `
+			<div class="iflow-loading">
+				<div class="iflow-loading-dots">
+					<span></span>
+					<span></span>
+					<span></span>
+				</div>
+				<span class="iflow-loading-text">思考中...</span>
+			</div>
+		`;
+	}
+
+	private hideLoadingAnimation(messageId: string): void {
+		const messageEl = this.messagesContainer.querySelector(`[data-id="${messageId}"]`);
+		if (!messageEl) return;
+
+		const loadingEl = messageEl.querySelector('.iflow-loading');
+		if (loadingEl) {
+			loadingEl.remove();
+		}
 	}
 
 	private showOrUpdateToolCall(messageId: string, tool: import('./iflowService').IFlowToolCall): void {
