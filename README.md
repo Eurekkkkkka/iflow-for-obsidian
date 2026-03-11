@@ -4,8 +4,8 @@
 > 将 iFlow CLI 嵌入 Obsidian，在你的笔记库中实现 AI 协作。完整的能力：文件读写、搜索、bash 命令和多步骤工作流。
 
 ![iFlow Logo](https://img.shields.io/badge/iFlow-Obsidian-blue)
-![License](https://img.shields.io/github/license/junjie-yan/iflow-for-obsidian)
-![Version](https://img.shields.io/github/v/release/junjie-yan/iflow-for-obsidian)
+![License](https://img.shields.io/github/license/Eurekkkkkka/iflow-for-obsidian)
+![Version](https://img.shields.io/github/v/release/Eurekkkkkka/iflow-for-obsidian)
 
 ## ✨ 功能特性
 
@@ -349,7 +349,7 @@
 1. 在 Obsidian 中安装 [BRAT](https://github.com/TfTHacker/obsidian42-brat) 插件
 2. 打开 BRAT 设置：**设置 → 社区插件 → BRAT**
 3. 点击 **"Add Beta plugin"** 按钮
-4. 输入仓库地址：`https://github.com/junjie-yan/iflow-for-obsidian`
+4. 输入仓库地址：`https://github.com/Eurekkkkkka/iflow-for-obsidian`
 5. 点击 **"Add Plugin"**，BRAT 将自动安装插件
 6. 在 **设置 → 社区插件** 中启用 **"iFlow for Obsidian"**
 
@@ -357,7 +357,7 @@
 
 ### 方式二：手动安装
 
-1. 从 [Releases](https://github.com/junjie-yan/iflow-for-obsidian/releases) 下载最新版本
+1. 从 [Releases](https://github.com/Eurekkkkkka/iflow-for-obsidian/releases) 下载最新版本
 2. 将 `main.js`、`manifest.json` 和 `styles.css` 复制到你的 vault 的插件文件夹：
    ```
    /path/to/vault/.obsidian/plugins/iflow-for-obsidian/
@@ -369,7 +369,7 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/junjie-yan/iflow-for-obsidian.git
+git clone https://github.com/Eurekkkkkka/iflow-for-obsidian.git
 cd iflow-for-obsidian
 
 # 安装依赖
@@ -639,7 +639,7 @@ src/
 
 ## 🤝 贡献
 
-欢迎贡献！请随时提交 [Issue](https://github.com/junjie-yan/iflow-for-obsidian/issues) 或 [Pull Request](https://github.com/junjie-yan/iflow-for-obsidian/pulls)。
+欢迎贡献！请随时提交 [Issue](https://github.com/Eurekkkkkka/iflow-for-obsidian/issues) 或 [Pull Request](https://github.com/Eurekkkkkka/iflow-for-obsidian/pulls)。
 
 ### 开发指南
 
@@ -673,7 +673,7 @@ src/
 ## 📮 联系方式
 
 - GitHub: [@junjie-yan](https://github.com/junjie-yan)
-- Issues: [GitHub Issues](https://github.com/junjie-yan/iflow-for-obsidian/issues)
+- Issues: [GitHub Issues](https://github.com/Eurekkkkkka/iflow-for-obsidian/issues)
 
 ## 🔗 相关项目
 
