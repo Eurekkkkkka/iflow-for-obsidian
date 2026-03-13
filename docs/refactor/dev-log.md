@@ -166,7 +166,46 @@
 
 ---
 
-## 本轮阶段结论（第二轮）
+## 2026-03-13 Bug 修复记录
+
+### Bug 1：侧边栏按钮无法收起（toggle 缺失）
+
+- **问题**：点击 Ribbon 按钮只会一直调用 `workspace.revealLeaf()`，无法通过再次点击收起侧边栏。
+- **根因**：`activateView()` 在 leaf 已存在时直接跳到 `revealLeaf(leaf)`，没有任何收起逻辑。
+- **Red**：新增 `tests/viewUtils.test.ts`，测试 `shouldCollapseView(hasLeaf, sidebarCollapsed, forceOpen)` 的 4 种场景。初次执行失败（模块不存在）。
+- **Green**：创建 `src/app/viewUtils.ts`，实现 `shouldCollapseView`(当 `hasLeaf && !sidebarCollapsed && !forceOpen` 时返回 true)。4/4 测试通过。
+- **Refactor**：
+  1. 修改 `activateView(forceOpen = false)` 接受可选参数；leaf 存在时通过 `shouldCollapseView` 判断 collapse 或 reveal。
+  2. Ribbon 按钮调用 `activateView()`（默认 `forceOpen=false`，实现 toggle）。
+  3. `onLayoutReady` 和命令调用 `activateView(true)`（强制展开，不触发收起）。
+- **结果**：50/50 测试通过，构建通过。
+
+### Bug 2：Windows 下弹出 CLI 黑框
+
+- **问题**：插件启动时调用 `startSdk()`，会弹出可见的 Windows 命令提示符窗口。
+- **根因**：
+  1. 旧代码通过 `cmd.exe /c "iflow ..."` 间接启动；`windowsHide:true` 仅作用于 cmd.exe 本身，iflow 作为其子进程会自行 `AllocConsole()` 创建新控制台窗口。
+  2. `detached:true` 下未调用 `unref()`，导致进程未真正后台化。
+- **Red**：新增 `tests/sdkSpawnOptions.test.ts`，测试 `buildSdkSpawnOptions(platform)` 在 Win32/Linux 下的 shell/windowsHide/detached 三个字段。初次执行失败（模块不存在）。
+- **Green**：创建 `src/app/sdkSpawnOptions.ts`，实现 `buildSdkSpawnOptions`：Windows 返回 `{detached:true, shell:true, windowsHide:true}`；其他平台返回 `{detached:true, shell:false, windowsHide:false}`。3/3 测试通过。
+- **Refactor**：
+  1. `startSdk()` 改为直接 spawn `iflow`（不再经过 cmd.exe 包装）；`windowsHide:true` 直接作用于 iflow 进程本身，彻底抑制控制台窗口。
+  2. 添加 `stdio: 'ignore'`，防止控制台继承。
+  3. 调用 `this.sdkProcess.unref()`，允许 Obsidian 关闭而 SDK 继续后台运行。
+- **结果**：50/50 测试通过，构建通过。
+
+---
+
+## 本轮阶段结论（第三轮·Bug 修复）
+
+- TDD 状态：Red → Green → Refactor 完整执行。
+- 新增测试：2 个测试文件（viewUtils: 4 tests，sdkSpawnOptions: 3 tests），共 +7 tests。
+- 累计：16 个测试文件，50 个测试全部通过。
+- 工程校验：`npm run build` 通过。
+- 新增模块：
+  - `src/app/viewUtils.ts` — 侧边栏 toggle 逻辑纯函数
+  - `src/app/sdkSpawnOptions.ts` — 跨平台 SDK 启动参数构建
+
 
 - TDD 状态：已完成第二轮 Red -> Green -> Refactor。
 - 新增测试：14 个测试文件，43 个测试全部通过。
@@ -179,3 +218,51 @@
   - 任务 E ✅ 完成（chatController/chatContextBuilder/promptComposer + loadConversation + 测试）
   - 任务 F ✅ 完成（LocalStorageConversationRepository + ConversationService 补齐 + chatView 迁移）
 - chatView.ts 已从"全能类"瘦身为装配层，所有 UI 渲染、协议交互、会话领域逻辑均委托至专职模块。
+
+---
+
+## 2026-03-13 任务记录（第四轮·Windows 隐式启动落地）
+
+### 任务：按改进文档落地 Windows 下“必定不弹 node/cmd 窗口”方案
+
+- 目标：不改变 ACP 协议与业务链路，仅替换 Windows 启动路径，确保后台隐式启动 iFlow ACP Server。
+- 背景：此前 `spawn('iflow', ...)` 在 Windows 上仍可能经由 npm shim（`iflow.ps1/iflow.cmd`）拉起 `node.exe`，造成可见窗口。
+
+### Red
+
+- 新增 `tests/windowsIflowLauncher.test.ts`（4个用例）：
+  1. 存在 sibling `node.exe` 时优先使用。
+  2. 无 sibling `node.exe` 时回退系统 `node`。
+  3. 缺失 `APPDATA` 时抛出明确错误。
+  4. 缺失 CLI `entry.js` 时抛出明确错误。
+- 首次执行失败：模块 `src/app/windowsIflowLauncher.ts` 不存在（符合 Red 预期）。
+
+### Green
+
+- 新增 `src/app/windowsIflowLauncher.ts`：
+  - 实现 `resolveWindowsIflowLaunch(port)`。
+  - 通过 `APPDATA\\npm` 推导 `entry.js` 路径：
+    `node_modules/@iflow-ai/iflow-cli/bundle/entry.js`。
+  - 若存在 `APPDATA\\npm\\node.exe`，优先使用该可执行；否则回退 `node`。
+  - 统一生成 ACP 参数：`--experimental-acp --port <port> --stream`。
+- 修复 TS 兼容：Node 内置模块导入改为 `import * as path/fs`。
+- `tests/windowsIflowLauncher.test.ts`：4/4 通过。
+
+### Refactor
+
+- 修改 `src/main.ts` 的 `startSdk()`：
+  - Windows 分支不再使用 `spawn('iflow', ...)`。
+  - 改为 `resolveWindowsIflowLaunch(port)` 后直接 `spawn(command, args, { shell:false, detached:true, windowsHide:true, stdio:'ignore' })`。
+  - 保留 `unref()`、`checkConnection()`、Notice 提示、自动启动/重启命令等上层流程不变。
+  - 非 Windows 分支保持现有 `iflow` 启动逻辑不变。
+
+### 结果
+
+- 构建：`npm run build` 通过。
+- 全量测试：17 个测试文件，54 个测试全部通过。
+- 功能影响面：仅 Windows 启动器路径解析与进程拉起方式，ACP WebSocket、聊天链路、会话链路无改动。
+
+### 风险与后续
+
+- 风险：极少数环境若 npm 全局目录非 `APPDATA\\npm`，可能导致 `entry.js` 解析失败。
+- 后续建议：可增加“自定义 CLI 路径”设置项，作为企业环境/便携环境兜底。

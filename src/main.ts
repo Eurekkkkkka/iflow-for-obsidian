@@ -3,6 +3,8 @@ import { IFlowService } from './iflowService';
 import { IFlowChatView, VIEW_TYPE_IFLOW_CHAT } from './chatView';
 import { initI18n, t } from './i18n';
 import { bootstrap, type PluginRuntime } from './app/pluginBootstrap';
+import { shouldCollapseView } from './app/viewUtils';
+import { resolveWindowsIflowLaunch } from './app/windowsIflowLauncher';
 
 // Import Node.js modules for process management (Electron environment)
 declare const require: (module: string) => any;
@@ -64,16 +66,16 @@ export default class IFlowPlugin extends Plugin {
 			(leaf) => (this.chatView = new IFlowChatView(leaf, this, this.iflowService))
 		);
 
-		// Add ribbon icon
+			// Add ribbon icon — toggle behavior: click again to close the sidebar
 		this.addRibbonIcon('message-square', 'Open iFlow Chat', () => {
 			this.activateView();
 		});
 
-		// Add command to open chat
+		// Add command to open chat (commands always open, no toggle)
 		this.addCommand({
 			id: 'open-iflow-chat',
 			name: 'Open iFlow Chat',
-			callback: () => this.activateView(),
+			callback: () => this.activateView(true),
 		});
 
 		// Add command to open chat with selected text
@@ -110,7 +112,8 @@ export default class IFlowPlugin extends Plugin {
 			if (this.settings.autoStartSdk) {
 				await this.ensureSdkRunning();
 			}
-			this.activateView();
+			// forceOpen=true: auto-open on startup should always reveal, not toggle
+			this.activateView(true);
 		});
 	}
 
@@ -152,47 +155,41 @@ export default class IFlowPlugin extends Plugin {
 		return new Promise((resolve) => {
 			try {
 				console.log('[iFlow] Starting SDK on port', port);
-				
-				// Determine the command based on platform
-				const isWindows = process.platform === 'win32';
-				
-				// Start iflow in ACP mode
-				// On Windows, use cmd.exe to run the iflow command
-				// On Unix, use shell directly
-				if (isWindows) {
-					this.sdkProcess = spawn('cmd.exe', [
-						'/c',
-						`iflow --experimental-acp --port ${port} --stream`
-					], {
-						detached: true,
+
+				if (process.platform === 'win32') {
+					// Windows: bypass npm shim (iflow.ps1/cmd) and launch node+entry.js directly
+					// so windowsHide can apply to the real process and avoid visible console windows.
+					const launch = resolveWindowsIflowLaunch(port);
+					this.sdkProcess = spawn(launch.command, launch.args, {
 						shell: false,
+						detached: true,
 						windowsHide: true,
+						stdio: 'ignore',
 					});
 				} else {
 					this.sdkProcess = spawn('iflow', [
 						'--experimental-acp',
 						'--port', String(port),
-						'--stream'
+						'--stream',
 					], {
+						shell: false,
 						detached: true,
+						stdio: 'ignore',
 					});
 				}
 
-				// Handle process events
+				// Fully detach: allow Obsidian to close without waiting for SDK
+				this.sdkProcess.unref();
+
+				// Handle process errors (e.g. iflow not installed / not in PATH)
 				this.sdkProcess.on('error', (err: Error) => {
 					console.error('[iFlow] SDK process error:', err);
 					resolve(false);
 				});
 
-				this.sdkProcess.stdout?.on('data', (data: Buffer) => {
-					console.log('[iFlow SDK]', data.toString());
-				});
+				// stdout/stderr are null (stdio:'ignore') — no handlers needed
 
-				this.sdkProcess.stderr?.on('data', (data: Buffer) => {
-					console.error('[iFlow SDK Error]', data.toString());
-				});
-
-				// Wait a bit for the server to start, then check connection
+				// Wait for the server to start, then check connection
 				setTimeout(async () => {
 					const connected = await this.iflowService.checkConnection();
 					resolve(connected);
@@ -214,22 +211,29 @@ export default class IFlowPlugin extends Plugin {
 		// This allows the SDK to keep running even if Obsidian is closed
 	}
 
-	async activateView() {
+	/**
+	 * Toggle sidebar chat view.
+	 * @param forceOpen - when true, always reveal (auto-start / command palette). When false (ribbon click), collapse if already visible.
+	 */
+	async activateView(forceOpen = false) {
 		const { workspace } = this.app;
-
-		let leaf: WorkspaceLeaf | null = null;
 		const leaves = workspace.getLeavesOfType(VIEW_TYPE_IFLOW_CHAT);
 
 		if (leaves.length > 0) {
-			// Already open, just reveal
-			leaf = leaves[0];
-		} else {
-			// Open in right sidebar
-			leaf = workspace.getRightLeaf(false);
-			await leaf.setViewState({ type: VIEW_TYPE_IFLOW_CHAT, active: true });
+			const leaf = leaves[0];
+			if (shouldCollapseView(true, workspace.rightSplit.collapsed, forceOpen)) {
+				// Sidebar is open and user clicked ribbon to toggle it off
+				workspace.rightSplit.collapse();
+			} else {
+				workspace.revealLeaf(leaf);
+			}
+			return;
 		}
 
-		workspace.revealLeaf(leaf);
+		// First open: create leaf in right sidebar
+		const leaf = workspace.getRightLeaf(false);
+		await leaf!.setViewState({ type: VIEW_TYPE_IFLOW_CHAT, active: true });
+		workspace.revealLeaf(leaf!);
 	}
 
 	async loadSettings() {
