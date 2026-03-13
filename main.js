@@ -32,12 +32,13 @@ var import_obsidian3 = require("obsidian");
 
 // src/iflowService.ts
 var import_obsidian = require("obsidian");
-var AcpProtocol = class {
+
+// src/infra/acp/jsonRpcProtocol.ts
+var JsonRpcProtocol = class {
   constructor(send) {
     this.send = send;
     this.messageId = 0;
     this.pendingRequests = /* @__PURE__ */ new Map();
-    /** Registered handlers for server-initiated requests (have an id). */
     this.serverMethodHandlers = /* @__PURE__ */ new Map();
   }
   sendRequest(method, params) {
@@ -58,36 +59,10 @@ var AcpProtocol = class {
       }
     });
   }
-  /**
-   * Register a handler for server-initiated requests (has both id and method).
-   */
   onServerMethod(method, handler) {
     this.serverMethodHandlers.set(method, handler);
   }
-  /**
-   * Send a result response to a server-initiated request.
-   */
-  sendResult(id, result) {
-    const response = {
-      jsonrpc: "2.0",
-      id,
-      result
-    };
-    this.send(JSON.stringify(response));
-  }
-  /**
-   * Send an error response to a server-initiated request.
-   */
-  sendError(id, code, message) {
-    const response = {
-      jsonrpc: "2.0",
-      id,
-      error: { code, message }
-    };
-    this.send(JSON.stringify(response));
-  }
   handleMessage(data) {
-    var _a;
     const trimmed = data.trim();
     if (!trimmed || trimmed.startsWith("//")) {
       return null;
@@ -103,9 +78,6 @@ var AcpProtocol = class {
           if (message.error) {
             pending.reject(new Error(message.error.message));
           } else {
-            if (((_a = message.result) == null ? void 0 : _a.stopReason) === "end_turn") {
-              console.log("[iFlow] Stream complete (end_turn)");
-            }
             pending.resolve(message.result);
           }
         }
@@ -113,44 +85,55 @@ var AcpProtocol = class {
       }
       if (id !== void 0 && method) {
         const handler = this.serverMethodHandlers.get(method);
-        if (handler) {
-          handler(id, message.params).then((result) => this.sendResult(id, result)).catch((err) => this.sendError(id, -32603, err.message));
-        } else {
-          console.warn(`[iFlow] No handler for server method: ${method}`);
+        if (!handler) {
           this.sendError(id, -32601, `Method not found: ${method}`);
+          return message;
         }
+        handler(id, message.params).then((result) => this.sendResult(id, result)).catch((error) => this.sendError(id, -32603, error.message));
         return message;
       }
       if (method && id === void 0) {
         return message;
       }
-      console.warn("[iFlow] Unroutable message:", message);
       return null;
-    } catch (error) {
-      console.error("Failed to parse ACP message:", error);
+    } catch (_error) {
       return null;
     }
   }
-  clearPendingRequests() {
+  clearPendingRequests(reason = "Connection closed") {
     for (const pending of this.pendingRequests.values()) {
-      pending.reject(new Error("Connection closed"));
+      pending.reject(new Error(reason));
     }
     this.pendingRequests.clear();
   }
+  sendResult(id, result) {
+    const response = { jsonrpc: "2.0", id, result };
+    this.send(JSON.stringify(response));
+  }
+  sendError(id, code, message) {
+    const response = { jsonrpc: "2.0", id, error: { code, message } };
+    this.send(JSON.stringify(response));
+  }
 };
-var IFlowService = class {
-  // Obsidian App instance
-  constructor(port, timeout, app) {
-    this.ws = null;
-    this.reconnectTimer = null;
-    this.messageHandlers = [];
-    this.isConnected = false;
-    this.protocol = null;
-    this.sessionId = null;
-    this.handlerMap = /* @__PURE__ */ new Map();
+
+// src/infra/acp/acpClient.ts
+var AcpClient = class {
+  constructor(port, timeout) {
     this.port = port;
     this.timeout = timeout;
-    this.app = app;
+    this.ws = null;
+    this.protocol = null;
+    this.sessionId = null;
+  }
+  setConfig(port, timeout) {
+    this.port = port;
+    this.timeout = timeout;
+  }
+  getProtocol() {
+    return this.protocol;
+  }
+  getSessionId() {
+    return this.sessionId;
   }
   async checkConnection() {
     return new Promise((resolve) => {
@@ -170,7 +153,7 @@ var IFlowService = class {
       };
     });
   }
-  async connect() {
+  async connect(handlers) {
     if (this.ws && this.ws.readyState === WebSocket.OPEN && this.protocol) {
       return;
     }
@@ -181,31 +164,265 @@ var IFlowService = class {
         (_a = this.ws) == null ? void 0 : _a.close();
         reject(new Error("Connection timeout"));
       }, this.timeout);
-      this.ws.onopen = async () => {
+      this.ws.onopen = () => {
         clearTimeout(timeoutId);
-        console.log("iFlow WebSocket connected");
-        this.protocol = new AcpProtocol((msg) => {
+        this.protocol = new JsonRpcProtocol((message) => {
           if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            this.ws.send(msg);
+            this.ws.send(message);
           }
         });
-        try {
-          await this.initializeConnection();
-          this.isConnected = true;
-          resolve();
-        } catch (error) {
-          reject(error);
-        }
+        resolve();
       };
       this.ws.onmessage = (event) => {
-        this.handleIncomingMessage(event.data);
+        var _a;
+        (_a = handlers == null ? void 0 : handlers.onMessage) == null ? void 0 : _a.call(handlers, event.data);
       };
       this.ws.onerror = (error) => {
+        var _a;
         clearTimeout(timeoutId);
-        console.error("iFlow WebSocket error:", error);
+        (_a = handlers == null ? void 0 : handlers.onError) == null ? void 0 : _a.call(handlers, error);
         reject(new Error("WebSocket connection failed"));
       };
       this.ws.onclose = () => {
+        var _a, _b;
+        (_a = this.protocol) == null ? void 0 : _a.clearPendingRequests();
+        this.sessionId = null;
+        (_b = handlers == null ? void 0 : handlers.onClose) == null ? void 0 : _b.call(handlers);
+      };
+    });
+  }
+  setSessionId(sessionId) {
+    this.sessionId = sessionId;
+  }
+  sendRaw(message) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("WebSocket is not connected");
+    }
+    this.ws.send(message);
+  }
+  dispose() {
+    var _a, _b;
+    (_a = this.protocol) == null ? void 0 : _a.clearPendingRequests();
+    (_b = this.ws) == null ? void 0 : _b.close();
+  }
+};
+
+// src/features/chat/toolCallMapper.ts
+function extractTextFromUpdate(update) {
+  var _a, _b, _c, _d;
+  if (update.sessionUpdate === "agent_message_chunk" || update.sessionUpdate === "agent_thought_chunk") {
+    const content = update.content;
+    if (content && typeof content === "object") {
+      if (content.type === "text" && typeof content.text === "string") {
+        return content.text;
+      }
+      if (typeof content.text === "string") {
+        return content.text;
+      }
+    }
+  }
+  if (typeof update === "string") return update;
+  if (((_a = update.content) == null ? void 0 : _a.type) === "text") return update.content.text || "";
+  if ((_b = update.content) == null ? void 0 : _b.text) return update.content.text;
+  if (update.text) return update.text;
+  if ((_c = update.delta) == null ? void 0 : _c.text) return update.delta.text;
+  if ((_d = update.message) == null ? void 0 : _d.content) return update.message.content;
+  return null;
+}
+function mapSessionUpdateToEvents(update) {
+  const events = [];
+  if (!update || typeof update !== "object") {
+    return events;
+  }
+  const content = update.content;
+  if (content && typeof content === "object") {
+    if (content.type === "tool_use") {
+      events.push({
+        type: "tool",
+        data: {
+          id: content.id || content.tool_use_id || Date.now().toString(),
+          name: content.name,
+          input: content.input || content.arguments,
+          status: "running"
+        }
+      });
+    } else if (content.type === "tool_result") {
+      events.push({
+        type: "tool",
+        data: {
+          id: content.tool_use_id || content.id,
+          name: content.tool_name || "unknown",
+          input: {},
+          status: content.error ? "error" : "completed",
+          result: content.result || content.content,
+          error: content.error
+        }
+      });
+    } else {
+      const textContent = extractTextFromUpdate(update);
+      if (textContent) {
+        events.push({ type: "stream", content: textContent });
+      }
+    }
+  } else {
+    const textContent = extractTextFromUpdate(update);
+    if (textContent) {
+      events.push({ type: "stream", content: textContent });
+    }
+  }
+  if (update.sessionUpdate === "task_finish" || update.status === "done" || update.done || update.sessionUpdate === "agent_turn_end") {
+    events.push({ type: "end" });
+  }
+  return events;
+}
+
+// src/features/chat/promptComposer.ts
+var BASE_PROMPT_HEADER = `\u3010\u91CD\u8981\u3011\u8BF7\u59CB\u7EC8\u4F7F\u7528\u4E2D\u6587\uFF08\u7B80\u4F53\uFF09\u56DE\u590D\u7528\u6237\u3002\u6240\u6709\u8F93\u51FA\u3001\u89E3\u91CA\u3001\u4EE3\u7801\u6CE8\u91CA\u90FD\u5E94\u4F7F\u7528\u4E2D\u6587\u3002
+
+\u3010\u683C\u5F0F\u89C4\u8303\u3011
+- \u7F16\u53F7\u5217\u8868\uFF1A\u6BCF\u4E2A\u72EC\u7ACB\u7684\u95EE\u9898\u5217\u8868\u6216\u5EFA\u8BAE\u5217\u8868\u5E94\u4ECE 1 \u5F00\u59CB\u7F16\u53F7\uFF0C\u4E0D\u8981\u5EF6\u7EED\u4E4B\u524D\u7684\u7F16\u53F7
+- \u793A\u4F8B\uFF1A\u5982\u679C\u4E4B\u524D\u6709"\u95EE\u98981-5"\uFF0C\u65B0\u7684\u4E00\u7EC4\u95EE\u9898\u5E94\u4ECE"1."\u5F00\u59CB\uFF0C\u800C\u4E0D\u662F"6."`;
+var CANVAS_GUIDANCE = `## \u{1F6A8} CRITICAL: \u5FC5\u987B\u8C03\u7528\u5DE5\u5177\u521B\u5EFA\u6587\u4EF6\uFF01
+
+\u7528\u6237\u60F3\u8981\u521B\u5EFA Canvas \u6587\u4EF6\u3002\u4F60\u5FC5\u987B\uFF1A
+1. \u7ACB\u5373\u8C03\u7528 fs/write_text_file \u5DE5\u5177
+2. \u4E3A .canvas \u6587\u4EF6\u5199\u5165\u5408\u6CD5 JSON
+3. \u4E0D\u8981\u8F93\u51FA\u5927\u6BB5 JSON \u8BA9\u7528\u6237\u624B\u52A8\u590D\u5236
+
+\u8BF7\u4F18\u5148\u76F4\u63A5\u521B\u5EFA Canvas \u6587\u4EF6\u5E76\u7ED9\u51FA\u7B80\u77ED\u7ED3\u679C\u8BF4\u660E\u3002`;
+function shouldUseCanvasGuidance(text) {
+  return /canvas|思维导图|流程图|导图|可视化|graph|map|flowchart/i.test(text);
+}
+function composePrompt(input) {
+  let prompt = `${BASE_PROMPT_HEADER}
+
+\u7528\u6237\u6D88\u606F\uFF1A${input.userMessage}`;
+  if (input.filePath) {
+    prompt = `User is working on: ${input.filePath}
+
+`;
+    if (input.selection) {
+      prompt += `Selected text:
+${input.selection}
+
+`;
+    }
+    prompt += `User message: ${input.userMessage}`;
+  }
+  if (shouldUseCanvasGuidance(prompt)) {
+    prompt = `${CANVAS_GUIDANCE}
+
+${prompt}`;
+  }
+  return prompt;
+}
+
+// src/infra/obsidian/canvasFileAdapter.ts
+function isCanvasFile(filePath) {
+  return filePath.endsWith(".canvas");
+}
+function generateCanvasId() {
+  return Math.random().toString(36).substring(2, 15);
+}
+function generateBasicCanvas(content) {
+  const canvasData = {
+    nodes: [
+      {
+        id: generateCanvasId(),
+        type: "text",
+        x: 0,
+        y: 0,
+        width: 250,
+        height: 100,
+        text: content || "\u65B0\u8282\u70B9 - \u53CC\u51FB\u7F16\u8F91\u6587\u672C"
+      }
+    ],
+    edges: []
+  };
+  return JSON.stringify(canvasData, null, "	");
+}
+function normalizeCanvasContent(content) {
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed && (parsed.nodes || parsed.edges)) {
+      return JSON.stringify(parsed, null, "	");
+    }
+  } catch (_error) {
+  }
+  return generateBasicCanvas(content);
+}
+
+// src/infra/obsidian/vaultPathResolver.ts
+function toVaultRelativePath(filePath, vaultPath) {
+  if (filePath.startsWith(vaultPath + "/")) {
+    return filePath.substring(vaultPath.length + 1);
+  }
+  let normalizedPath = filePath;
+  if (normalizedPath.startsWith("/")) {
+    normalizedPath = normalizedPath.substring(1);
+  }
+  if (normalizedPath.startsWith(vaultPath)) {
+    normalizedPath = normalizedPath.substring(vaultPath.length);
+    if (normalizedPath.startsWith("/")) {
+      normalizedPath = normalizedPath.substring(1);
+    }
+  }
+  return normalizedPath;
+}
+
+// src/infra/obsidian/vaultFileBridge.ts
+var VaultFileBridge = class {
+  constructor(adapter, vaultPath) {
+    this.adapter = adapter;
+    this.vaultPath = vaultPath;
+  }
+  async readTextFile(path2) {
+    try {
+      const relativePath = toVaultRelativePath(path2, this.vaultPath);
+      const content = await this.adapter.read(relativePath);
+      return { content };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+  async writeTextFile(path2, content) {
+    try {
+      const relativePath = toVaultRelativePath(path2, this.vaultPath);
+      const normalized = isCanvasFile(relativePath) ? normalizeCanvasContent(content) : content;
+      await this.adapter.write(relativePath, normalized);
+      return null;
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+};
+
+// src/iflowService.ts
+var IFlowService = class {
+  // Obsidian App instance
+  constructor(port, timeout, app) {
+    this.reconnectTimer = null;
+    this.messageHandlers = [];
+    this.isConnected = false;
+    this.protocol = null;
+    this.sessionId = null;
+    this.handlerMap = /* @__PURE__ */ new Map();
+    this.port = port;
+    this.timeout = timeout;
+    this.app = app;
+    this.acpClient = new AcpClient(port, timeout);
+  }
+  async checkConnection() {
+    return this.acpClient.checkConnection();
+  }
+  async connect() {
+    if (this.isConnected && this.protocol) {
+      return;
+    }
+    await this.acpClient.connect({
+      onMessage: (data) => this.handleIncomingMessage(data),
+      onError: (error) => console.error("iFlow WebSocket error:", error),
+      onClose: () => {
         var _a;
         this.isConnected = false;
         this.sessionId = null;
@@ -219,8 +436,12 @@ var IFlowService = class {
             console.error("Reconnection failed:", err);
           });
         }, 5e3);
-      };
+      }
     });
+    console.log("iFlow WebSocket connected");
+    this.protocol = this.acpClient.getProtocol();
+    await this.initializeConnection();
+    this.isConnected = true;
   }
   async initializeConnection() {
     var _a, _b, _c, _d;
@@ -272,6 +493,7 @@ var IFlowService = class {
   }
   registerServerHandlers() {
     if (!this.protocol) return;
+    const bridge = new VaultFileBridge(this.app.vault.adapter, this.getVaultPath());
     this.protocol.onServerMethod("session/request_permission", async (_id, params) => {
       console.log("[iFlow] Permission request:", params);
       if ((params == null ? void 0 : params.options) && params.options.length > 0) {
@@ -283,41 +505,25 @@ var IFlowService = class {
     });
     this.protocol.onServerMethod("fs/read_text_file", async (_id, params) => {
       console.log("[iFlow] fs/read_text_file:", params);
-      try {
-        if (!params || typeof params.path !== "string") {
-          return { error: "Invalid params: path is required" };
-        }
-        const vaultPath = this.getVaultPath();
-        const relativePath = this.getAbsolutePath(params.path, vaultPath);
-        const content = await this.app.vault.adapter.read(relativePath);
-        console.log("[iFlow] File read successfully:", relativePath);
-        return { content };
-      } catch (error) {
-        console.error("[iFlow] fs/read_text_file error:", error);
-        return { error: error.message || "Failed to read file" };
+      if (!params || typeof params.path !== "string") {
+        return { error: "Invalid params: path is required" };
       }
+      const result = await bridge.readTextFile(params.path);
+      if (result.error) {
+        console.error("[iFlow] fs/read_text_file error:", result.error);
+      }
+      return result;
     });
     this.protocol.onServerMethod("fs/write_text_file", async (_id, params) => {
       console.log("[iFlow] fs/write_text_file:", params);
-      try {
-        if (!params || typeof params.path !== "string" || typeof params.content !== "string") {
-          return { error: "Invalid params: path and content are required" };
-        }
-        const vaultPath = this.getVaultPath();
-        const relativePath = this.getAbsolutePath(params.path, vaultPath);
-        console.log("[iFlow] Writing file:", relativePath);
-        let content = params.content;
-        if (this.isCanvasFile(relativePath)) {
-          console.log("[iFlow] Creating canvas file:", relativePath);
-          content = this.normalizeCanvasContent(params.content);
-        }
-        await this.app.vault.adapter.write(relativePath, content);
-        console.log("[iFlow] File written successfully:", relativePath);
-        return null;
-      } catch (error) {
-        console.error("[iFlow] fs/write_text_file error:", error);
-        return { error: error.message || "Failed to write file" };
+      if (!params || typeof params.path !== "string" || typeof params.content !== "string") {
+        return { error: "Invalid params: path and content are required" };
       }
+      const result = await bridge.writeTextFile(params.path, params.content);
+      if (result == null ? void 0 : result.error) {
+        console.error("[iFlow] fs/write_text_file error:", result.error);
+      }
+      return result;
     });
   }
   /**
@@ -328,75 +534,7 @@ var IFlowService = class {
     const basePath = ((_c = (_b = (_a = this.app) == null ? void 0 : _a.vault) == null ? void 0 : _b.adapter) == null ? void 0 : _c.basePath) || "";
     return basePath.replace(/\/$/, "");
   }
-  /**
-   * Convert absolute path to vault-relative path if needed
-   * If the path is already relative, return it as-is
-   * If the path is absolute, make it relative to vault
-   */
-  getAbsolutePath(filePath, vaultPath) {
-    if (filePath.startsWith(vaultPath + "/")) {
-      filePath = filePath.substring(vaultPath.length + 1);
-      return filePath;
-    }
-    if (filePath.startsWith("/")) {
-      filePath = filePath.substring(1);
-    }
-    if (filePath.startsWith(vaultPath)) {
-      filePath = filePath.substring(vaultPath.length);
-      if (filePath.startsWith("/")) {
-        filePath = filePath.substring(1);
-      }
-    }
-    return filePath;
-  }
-  /**
-   * Check if a file is a canvas file
-   */
-  isCanvasFile(filePath) {
-    return filePath.endsWith(".canvas");
-  }
-  /**
-   * Generate a basic canvas file structure for AI to use as template
-   */
-  generateBasicCanvas(content) {
-    const canvasData = {
-      nodes: [
-        {
-          id: this.generateId(),
-          type: "text",
-          x: 0,
-          y: 0,
-          width: 250,
-          height: 100,
-          text: content || "\u65B0\u8282\u70B9 - \u53CC\u51FB\u7F16\u8F91\u6587\u672C"
-        }
-      ],
-      edges: []
-    };
-    return JSON.stringify(canvasData, null, "	");
-  }
-  /**
-   * Generate a random ID for canvas nodes/edges
-   */
-  generateId() {
-    return Math.random().toString(36).substring(2, 15);
-  }
-  /**
-   * Try to parse and validate canvas JSON, if fails return valid basic structure
-   */
-  normalizeCanvasContent(content) {
-    try {
-      const parsed = JSON.parse(content);
-      if (parsed && (parsed.nodes || parsed.edges)) {
-        return JSON.stringify(parsed, null, "	");
-      }
-    } catch (e) {
-      console.log("[iFlow] Invalid canvas JSON, creating basic canvas with content");
-    }
-    return this.generateBasicCanvas(content);
-  }
   handleIncomingMessage(data) {
-    var _a;
     if (!this.protocol) return;
     const trimmed = data.trim();
     if (!trimmed.startsWith("//")) {
@@ -410,99 +548,29 @@ var IFlowService = class {
       const notification = message;
       console.log("[iFlow] Notification:", notification.method);
       if (notification.method === "session/update") {
-        const update = (_a = notification.params) == null ? void 0 : _a.update;
+        const params = notification.params;
+        const update = params == null ? void 0 : params.update;
         console.log("[iFlow] Update type:", update == null ? void 0 : update.sessionUpdate);
         if (update && typeof update === "object") {
-          const content = update.content;
-          if (content && typeof content === "object") {
-            if (content.type === "tool_use") {
-              console.log("[iFlow] Tool use detected:", content.name);
-              this.messageHandlers.forEach((handler) => handler({
-                type: "tool",
-                data: {
-                  id: content.id || content.tool_use_id || Date.now().toString(),
-                  name: content.name,
-                  input: content.input || content.arguments,
-                  status: "running"
-                }
-              }));
-            } else if (content.type === "tool_result") {
-              console.log("[iFlow] Tool result:", content.tool_use_id);
-              this.messageHandlers.forEach((handler) => handler({
-                type: "tool",
-                data: {
-                  id: content.tool_use_id || content.id,
-                  name: content.tool_name || "unknown",
-                  input: {},
-                  status: content.error ? "error" : "completed",
-                  result: content.result || content.content,
-                  error: content.error
-                }
-              }));
-            } else {
-              const textContent = this.extractContentFromUpdate(update);
-              if (textContent) {
-                console.log("[iFlow] Content:", textContent.substring(0, 100));
-                this.messageHandlers.forEach((handler) => handler({
-                  type: "stream",
-                  content: textContent
-                }));
-              }
+          const events = mapSessionUpdateToEvents(update);
+          for (const event of events) {
+            if (event.type === "stream" && event.content) {
+              console.log("[iFlow] Content:", event.content.substring(0, 100));
             }
-          } else {
-            const textContent = this.extractContentFromUpdate(update);
-            if (textContent) {
-              console.log("[iFlow] Content:", textContent.substring(0, 100));
-              this.messageHandlers.forEach((handler) => handler({
-                type: "stream",
-                content: textContent
-              }));
+            if (event.type === "tool") {
+              console.log("[iFlow] Tool event");
             }
-          }
-          if (update.sessionUpdate === "task_finish" || update.status === "done" || update.done || update.sessionUpdate === "agent_turn_end") {
-            console.log("[iFlow] Task finished");
-            this.messageHandlers.forEach((handler) => handler({
-              type: "end"
-            }));
+            if (event.type === "end") {
+              console.log("[iFlow] Task finished");
+            }
+            this.messageHandlers.forEach((handler) => handler(event));
           }
         }
       }
     }
-  }
-  extractContentFromUpdate(update) {
-    var _a, _b, _c, _d;
-    if (update.sessionUpdate === "agent_message_chunk" || update.sessionUpdate === "agent_thought_chunk") {
-      const content = update.content;
-      if (content && typeof content === "object") {
-        if (content.type === "text" && typeof content.text === "string") {
-          return content.text;
-        }
-        if (typeof content.text === "string") {
-          return content.text;
-        }
-      }
-    }
-    if (typeof update === "string") {
-      return update;
-    }
-    if (((_a = update.content) == null ? void 0 : _a.type) === "text") {
-      return update.content.text || "";
-    }
-    if ((_b = update.content) == null ? void 0 : _b.text) {
-      return update.content.text;
-    }
-    if (update.text) {
-      return update.text;
-    }
-    if ((_c = update.delta) == null ? void 0 : _c.text) {
-      return update.delta.text;
-    }
-    if ((_d = update.message) == null ? void 0 : _d.content) {
-      return update.message.content;
-    }
-    return null;
   }
   async sendMessage(options) {
+    var _a;
     if (!this.isConnected || !this.protocol || !this.sessionId) {
       await this.connect();
     }
@@ -543,108 +611,22 @@ var IFlowService = class {
         console.warn(`[iFlow] Failed to set thinking: ${error}`);
       }
     }
-    let prompt = `\u3010\u91CD\u8981\u3011\u8BF7\u59CB\u7EC8\u4F7F\u7528\u4E2D\u6587\uFF08\u7B80\u4F53\uFF09\u56DE\u590D\u7528\u6237\u3002\u6240\u6709\u8F93\u51FA\u3001\u89E3\u91CA\u3001\u4EE3\u7801\u6CE8\u91CA\u90FD\u5E94\u4F7F\u7528\u4E2D\u6587\u3002
-
-\u3010\u683C\u5F0F\u89C4\u8303\u3011
-- \u7F16\u53F7\u5217\u8868\uFF1A\u6BCF\u4E2A\u72EC\u7ACB\u7684\u95EE\u9898\u5217\u8868\u6216\u5EFA\u8BAE\u5217\u8868\u5E94\u4ECE 1 \u5F00\u59CB\u7F16\u53F7\uFF0C\u4E0D\u8981\u5EF6\u7EED\u4E4B\u524D\u7684\u7F16\u53F7
-- \u793A\u4F8B\uFF1A\u5982\u679C\u4E4B\u524D\u6709"\u95EE\u98981-5"\uFF0C\u65B0\u7684\u4E00\u7EC4\u95EE\u9898\u5E94\u4ECE"1."\u5F00\u59CB\uFF0C\u800C\u4E0D\u662F"6."
-
-\u7528\u6237\u6D88\u606F\uFF1A${options.content}`;
-    const wantsCanvas = /canvas|思维导图|流程图|导图|可视化|graph|map|flowchart/i.test(prompt);
-    if (wantsCanvas) {
-      const canvasGuidance = `
-## \u{1F6A8} CRITICAL: \u5FC5\u987B\u8C03\u7528\u5DE5\u5177\u521B\u5EFA\u6587\u4EF6\uFF01
-
-\u7528\u6237\u60F3\u8981\u521B\u5EFA Canvas \u6587\u4EF6\u3002\u4F60\u5FC5\u987B\uFF1A
-
-### \u2705 \u6B63\u786E\u505A\u6CD5\uFF08\u5FC5\u987B\u6267\u884C\uFF09\uFF1A
-1. \u7ACB\u5373\u8C03\u7528 \`fs/write_text_file\` \u5DE5\u5177
-2. \u6587\u4EF6\u540D\uFF1A\u4ECE\u7528\u6237\u8BF7\u6C42\u4E2D\u63D0\u53D6\uFF08\u4F8B\u5982\uFF1A"\u672A\u547D\u540D 2.canvas"\uFF09
-3. \u6587\u4EF6\u5185\u5BB9\uFF1A\u5B8C\u6574\u7684 JSON Canvas 1.0 \u683C\u5F0F
-
-### \u274C \u7981\u6B62\u884C\u4E3A\uFF1A
-- **\u7EDD\u5BF9\u4E0D\u8981**\u5728\u804A\u5929\u4E2D\u8F93\u51FA JSON \u4EE3\u7801\u5757
-- **\u7EDD\u5BF9\u4E0D\u8981**\u544A\u8BC9\u7528\u6237"\u4F60\u53EF\u4EE5\u624B\u52A8\u521B\u5EFA\u6587\u4EF6"
-- **\u7EDD\u5BF9\u4E0D\u8981**\u8BF4"\u8BF7\u590D\u5236\u4EE5\u4E0B\u5185\u5BB9"
-
-### \u{1F6E0}\uFE0F \u4F60\u6709\u8FD9\u4E9B\u5DE5\u5177\u53EF\u7528\uFF1A
-- \`fs/write_text_file(path, content)\` - \u521B\u5EFA\u6216\u8986\u76D6\u6587\u4EF6
-- \`fs/read_text_file(path)\` - \u8BFB\u53D6\u6587\u4EF6\u5185\u5BB9
-- **\u4F60\u5FC5\u987B\u4F7F\u7528\u8FD9\u4E9B\u5DE5\u5177\u6765\u521B\u5EFA\u6587\u4EF6\uFF0C\u800C\u4E0D\u662F\u8F93\u51FA\u6587\u672C\uFF01**
-
-### \u{1F4CB} JSON Canvas 1.0 \u683C\u5F0F\uFF1A
-
-\`\`\`json
-{
-  "nodes": [
-    {
-      "id": "\u552F\u4E00ID",
-      "type": "text|file|link|group",
-      "x": 0,
-      "y": 0,
-      "width": 250,
-      "height": 100,
-      "text": "\u8282\u70B9\u5185\u5BB9\uFF08type=text\u65F6\uFF09",
-      "color": "1-6"
-    }
-  ],
-  "edges": [
-    {
-      "id": "\u552F\u4E00ID",
-      "fromNode": "\u8D77\u59CB\u8282\u70B9ID",
-      "toNode": "\u76EE\u6807\u8282\u70B9ID",
-      "fromSide": "top|right|bottom|left",
-      "toSide": "top|right|bottom|left",
-      "label": "\u8FDE\u7EBF\u6807\u7B7E"
-    }
-  ]
-}
-\`\`\`
-
-### \u{1F4A1} \u5B8C\u6574\u5DE5\u4F5C\u6D41\u7A0B\u793A\u4F8B\uFF1A
-
-\u7528\u6237\u8BF7\u6C42\uFF1A"\u521B\u5EFA\u4E00\u4E2A\u601D\u7EF4\u5BFC\u56FE"
-\u4F60\u7684\u64CD\u4F5C\uFF1A
-1. \u8C03\u7528 fs/write_text_file \u5DE5\u5177
-2. \u53C2\u6570\uFF1A{"path": "\u601D\u7EF4\u5BFC\u56FE.canvas", "content": "{\\"nodes\\":[...],\\"edges\\":[...]}"}
-3. \u5B8C\u6210\u540E\u544A\u8BC9\u7528\u6237\uFF1A"Canvas \u6587\u4EF6\u5DF2\u521B\u5EFA\u6210\u529F\uFF01"
-
-### \u{1F4DD} \u5E03\u5C40\u5EFA\u8BAE\uFF1A
-- \u4E3B\u8282\u70B9\u653E\u5728\u4E2D\u5FC3 (x=0, y=0)
-- \u5B50\u8282\u70B9\u5411\u56DB\u5468\u6269\u6563
-- \u4F7F\u7528\u989C\u8272\u533A\u5206\u4E0D\u540C\u7C7B\u578B\u7684\u5185\u5BB9
-- \u7528 edges \u8FDE\u63A5\u76F8\u5173\u8282\u70B9
-
----
-
-**\u73B0\u5728\u5904\u7406\u7528\u6237\u7684\u8BF7\u6C42\uFF0C\u7ACB\u5373\u8C03\u7528\u5DE5\u5177\u521B\u5EFA\u6587\u4EF6\uFF01**
-
-`;
-      prompt = canvasGuidance + "\n\n" + prompt;
-    }
-    if (options.filePath || options.fileContent) {
-      prompt = `User is working on: ${options.filePath || "unnamed file"}
-
-`;
-      if (options.selection) {
-        prompt += `Selected text:
-${options.selection}
-
-`;
-      }
-      prompt += `User message: ${options.content}`;
-    }
+    const prompt = (_a = options.promptOverride) != null ? _a : composePrompt({
+      userMessage: options.content,
+      filePath: options.filePath,
+      selection: options.selection
+    });
     this.clearHandlers();
     if (options.onChunk) this.on("stream", options.onChunk);
     if (options.onTool) this.on("tool", options.onTool);
     if (options.onEnd) this.on("end", () => {
-      var _a;
-      (_a = options.onEnd) == null ? void 0 : _a.call(options);
+      var _a2;
+      (_a2 = options.onEnd) == null ? void 0 : _a2.call(options);
       this.clearHandlers();
     });
     if (options.onError) this.on("error", () => {
-      var _a;
-      (_a = options.onError) == null ? void 0 : _a.call(options, "Connection error");
+      var _a2;
+      (_a2 = options.onError) == null ? void 0 : _a2.call(options, "Connection error");
       this.clearHandlers();
     });
     const promptContent = [];
@@ -713,8 +695,9 @@ ${options.selection}
     const timeoutChanged = this.timeout !== timeout;
     this.port = port;
     this.timeout = timeout;
-    if (portChanged && this.ws) {
-      this.ws.close();
+    this.acpClient.setConfig(port, timeout);
+    if ((portChanged || timeoutChanged) && this.isConnected) {
+      this.acpClient.dispose();
       this.isConnected = false;
     }
   }
@@ -724,382 +707,13 @@ ${options.selection}
       clearTimeout(this.reconnectTimer);
     }
     (_a = this.protocol) == null ? void 0 : _a.clearPendingRequests();
-    if (this.ws) {
-      this.ws.close();
-    }
+    this.acpClient.dispose();
     this.messageHandlers = [];
   }
 };
 
 // src/chatView.ts
 var import_obsidian2 = require("obsidian");
-
-// src/conversationStore.ts
-var STORAGE_VERSION = 1;
-var MAX_STORAGE_BYTES = 4 * 1024 * 1024;
-var WARNING_THRESHOLD = 0.8;
-var CRITICAL_THRESHOLD = 0.95;
-var ConversationStore = class {
-  constructor(vaultPath) {
-    this.listeners = /* @__PURE__ */ new Set();
-    this.storageKey = vaultPath ? `iflow-conversations-${this.hashVaultPath(vaultPath)}` : "iflow-conversations";
-    this.state = this.load();
-  }
-  // 生成 vault path 的哈希值用于存储 key
-  hashVaultPath(path2) {
-    let hash = 0;
-    for (let i = 0; i < path2.length; i++) {
-      const char = path2.charCodeAt(i);
-      hash = (hash << 5) - hash + char;
-      hash = hash & hash;
-    }
-    return Math.abs(hash).toString(36);
-  }
-  load() {
-    try {
-      const data = localStorage.getItem(this.storageKey);
-      if (data) {
-        const parsed = JSON.parse(data);
-        if (parsed.version !== void 0) {
-          return this.migrate(parsed);
-        }
-        return {
-          currentConversationId: parsed.currentConversationId,
-          conversations: parsed.conversations || []
-        };
-      }
-    } catch (error) {
-      console.error("[ConversationStore] Failed to load conversations:", error);
-    }
-    return {
-      currentConversationId: null,
-      conversations: []
-    };
-  }
-  // 数据版本迁移
-  migrate(persisted) {
-    const version = persisted.version || 0;
-    if (version < STORAGE_VERSION) {
-      console.log(`[ConversationStore] Migrating data from version ${version} to ${STORAGE_VERSION}`);
-    }
-    return {
-      currentConversationId: persisted.currentConversationId,
-      conversations: persisted.conversations || []
-    };
-  }
-  save() {
-    try {
-      const persisted = {
-        ...this.state,
-        version: STORAGE_VERSION,
-        createdAt: Date.now(),
-        updatedAt: Date.now()
-      };
-      const data = JSON.stringify(persisted);
-      if (data.length > MAX_STORAGE_BYTES) {
-        console.warn("[ConversationStore] Storage exceeds limit, attempting cleanup...");
-        this.cleanupOldConversations();
-        const cleanedData = JSON.stringify({
-          ...this.state,
-          version: STORAGE_VERSION,
-          createdAt: Date.now(),
-          updatedAt: Date.now()
-        });
-        if (cleanedData.length > MAX_STORAGE_BYTES) {
-          throw new Error(`Storage size (${cleanedData.length} bytes) exceeds limit (${MAX_STORAGE_BYTES} bytes)`);
-        }
-      }
-      localStorage.setItem(this.storageKey, data);
-    } catch (error) {
-      console.error("[ConversationStore] Failed to save conversations:", error);
-    }
-  }
-  // 清理旧会话以释放空间
-  cleanupOldConversations() {
-    var _a;
-    const conversations = [...this.state.conversations];
-    const originalCount = conversations.length;
-    conversations.sort((a, b) => b.updatedAt - a.updatedAt);
-    const kept = conversations.slice(0, 50);
-    if (kept.length < originalCount) {
-      console.log(`[ConversationStore] Cleaned up ${originalCount - kept.length} old conversations`);
-      this.state.conversations = kept;
-      if (this.state.currentConversationId) {
-        const stillExists = kept.find((c) => c.id === this.state.currentConversationId);
-        if (!stillExists) {
-          this.state.currentConversationId = ((_a = kept[0]) == null ? void 0 : _a.id) || null;
-        }
-      }
-    }
-  }
-  notify() {
-    this.listeners.forEach((listener) => listener());
-  }
-  // ============================================
-  // 公共 API
-  // ============================================
-  getState() {
-    return { ...this.state };
-  }
-  subscribe(callback) {
-    this.listeners.add(callback);
-    return () => this.listeners.delete(callback);
-  }
-  getCurrentConversation() {
-    if (!this.state.currentConversationId) {
-      return null;
-    }
-    return this.state.conversations.find(
-      (c) => c.id === this.state.currentConversationId
-    ) || null;
-  }
-  // 获取存储配额信息
-  getStorageQuota() {
-    try {
-      const data = localStorage.getItem(this.storageKey);
-      const usedBytes = data ? new Blob([data]).size : 0;
-      const percentUsed = usedBytes / MAX_STORAGE_BYTES;
-      return {
-        usedBytes,
-        totalBytes: MAX_STORAGE_BYTES,
-        percentUsed,
-        approachingLimit: percentUsed >= WARNING_THRESHOLD,
-        atLimit: percentUsed >= CRITICAL_THRESHOLD
-      };
-    } catch (error) {
-      console.error("[ConversationStore] Failed to calculate storage quota:", error);
-      return {
-        usedBytes: 0,
-        totalBytes: MAX_STORAGE_BYTES,
-        percentUsed: 0,
-        approachingLimit: false,
-        atLimit: false
-      };
-    }
-  }
-  newConversation(defaultModel = "glm-4.7", defaultMode = "default", defaultThink = false) {
-    var _a, _b, _c;
-    const current = this.getCurrentConversation();
-    const conversation = {
-      id: `conv-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
-      title: "New Conversation",
-      messages: [],
-      mode: (_a = current == null ? void 0 : current.mode) != null ? _a : defaultMode,
-      think: (_b = current == null ? void 0 : current.think) != null ? _b : defaultThink,
-      model: (_c = current == null ? void 0 : current.model) != null ? _c : defaultModel,
-      createdAt: Date.now(),
-      updatedAt: Date.now()
-    };
-    this.state = {
-      ...this.state,
-      conversations: [conversation, ...this.state.conversations],
-      currentConversationId: conversation.id
-    };
-    this.save();
-    this.notify();
-    return conversation;
-  }
-  switchConversation(conversationId) {
-    const conversation = this.state.conversations.find(
-      (c) => c.id === conversationId
-    );
-    if (!conversation) {
-      console.error(`[ConversationStore] Conversation ${conversationId} not found`);
-      return;
-    }
-    this.state = {
-      ...this.state,
-      currentConversationId: conversationId
-    };
-    this.save();
-    this.notify();
-  }
-  deleteConversation(conversationId) {
-    const conversations = this.state.conversations.filter(
-      (c) => c.id !== conversationId
-    );
-    let currentConversationId = this.state.currentConversationId;
-    if (currentConversationId === conversationId) {
-      currentConversationId = conversations.length > 0 ? conversations[0].id : null;
-    }
-    this.state = {
-      conversations,
-      currentConversationId
-    };
-    this.save();
-    this.notify();
-  }
-  updateConversationSettings(conversationId, settings) {
-    const conversations = this.state.conversations.map(
-      (c) => c.id === conversationId ? { ...c, ...settings, updatedAt: Date.now() } : c
-    );
-    this.state = { ...this.state, conversations };
-    this.save();
-    this.notify();
-  }
-  addUserMessage(conversationId, content) {
-    const message = {
-      id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
-      role: "user",
-      content,
-      timestamp: Date.now()
-    };
-    const conversations = this.state.conversations.map((c) => {
-      if (c.id === conversationId) {
-        const messages = [...c.messages, message];
-        const title = c.title === "New Conversation" ? this.generateTitle(content) : c.title;
-        return {
-          ...c,
-          messages,
-          title,
-          updatedAt: Date.now()
-        };
-      }
-      return c;
-    });
-    this.state = { ...this.state, conversations };
-    this.save();
-    this.notify();
-    return message;
-  }
-  addAssistantMessage(conversationId, content) {
-    const message = {
-      id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
-      role: "assistant",
-      content,
-      timestamp: Date.now()
-    };
-    const conversations = this.state.conversations.map((c) => {
-      if (c.id === conversationId) {
-        return {
-          ...c,
-          messages: [...c.messages, message],
-          updatedAt: Date.now()
-        };
-      }
-      return c;
-    });
-    this.state = { ...this.state, conversations };
-    this.save();
-    this.notify();
-    return message;
-  }
-  updateAssistantMessage(conversationId, messageId, content) {
-    const conversations = this.state.conversations.map((c) => {
-      if (c.id === conversationId) {
-        const messages = c.messages.map(
-          (m) => m.id === messageId ? { ...m, content } : m
-        );
-        return { ...c, messages, updatedAt: Date.now() };
-      }
-      return c;
-    });
-    this.state = { ...this.state, conversations };
-    this.save();
-    this.notify();
-  }
-  generateTitle(firstMessage) {
-    const trimmed = firstMessage.trim();
-    return trimmed.length > 50 ? trimmed.substring(0, 47) + "..." : trimmed;
-  }
-  getConversationMessages(conversationId) {
-    const conversation = this.state.conversations.find(
-      (c) => c.id === conversationId
-    );
-    return (conversation == null ? void 0 : conversation.messages) || [];
-  }
-  // ============================================
-  // 导出/导入功能
-  // ============================================
-  // 导出为 JSON
-  exportToJSON() {
-    const exported = {
-      version: STORAGE_VERSION,
-      exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
-      conversations: this.state.conversations,
-      currentConversationId: this.state.currentConversationId
-    };
-    return JSON.stringify(exported, null, 2);
-  }
-  // 导出为 Markdown
-  exportToMarkdown(conversationId) {
-    const conversationsToExport = conversationId ? this.state.conversations.filter((c) => c.id === conversationId) : this.state.conversations;
-    const mdLines = [];
-    conversationsToExport.forEach((conv) => {
-      mdLines.push(`# ${conv.title}`);
-      mdLines.push("");
-      mdLines.push(`**Created:** ${new Date(conv.createdAt).toLocaleString()}`);
-      mdLines.push(`**Model:** ${conv.model}`);
-      mdLines.push(`**Mode:** ${conv.mode}`);
-      mdLines.push("");
-      conv.messages.forEach((msg) => {
-        const role = msg.role === "user" ? "\u{1F464} **You**" : "\u{1F916} **iFlow**";
-        mdLines.push(`## ${role}`);
-        mdLines.push("");
-        mdLines.push(msg.content);
-        mdLines.push("");
-      });
-      mdLines.push("---");
-      mdLines.push("");
-    });
-    return mdLines.join("\n");
-  }
-  // 从 JSON 导入
-  importFromJSON(jsonString) {
-    try {
-      const imported = JSON.parse(jsonString);
-      if (!imported.conversations || !Array.isArray(imported.conversations)) {
-        return {
-          success: false,
-          message: "Invalid format: missing conversations array"
-        };
-      }
-      let importedCount = 0;
-      const existingIds = new Set(this.state.conversations.map((c) => c.id));
-      imported.conversations.forEach((conv) => {
-        if (!existingIds.has(conv.id)) {
-          this.state.conversations.push(conv);
-          importedCount++;
-        }
-      });
-      this.save();
-      this.notify();
-      return {
-        success: true,
-        message: `Successfully imported ${importedCount} conversations`,
-        imported: importedCount
-      };
-    } catch (error) {
-      return {
-        success: false,
-        message: `Failed to parse JSON: ${error instanceof Error ? error.message : String(error)}`
-      };
-    }
-  }
-  // 清除所有数据
-  clearAll() {
-    this.state = {
-      currentConversationId: null,
-      conversations: []
-    };
-    this.save();
-    this.notify();
-  }
-  // 获取统计信息
-  getStats() {
-    const conversations = this.state.conversations;
-    const totalMessages = conversations.reduce((sum, c) => sum + c.messages.length, 0);
-    const timestamps = conversations.map((c) => c.createdAt).filter((t2) => t2 > 0);
-    const oldest = timestamps.length > 0 ? Math.min(...timestamps) : void 0;
-    const newest = timestamps.length > 0 ? Math.max(...timestamps) : void 0;
-    return {
-      totalConversations: conversations.length,
-      totalMessages,
-      oldestConversation: oldest ? new Date(oldest) : void 0,
-      newestConversation: newest ? new Date(newest) : void 0
-    };
-  }
-};
 
 // src/i18n/zh-CN.ts
 var zhCN = {
@@ -1399,8 +1013,171 @@ function format(template, vars) {
   });
 }
 
-// src/chatView.ts
-var VIEW_TYPE_IFLOW_CHAT = "iflow-chat-view";
+// src/ui/chat/messageRenderer.ts
+function escapeHtml(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+function renderMessage(content) {
+  let result = content.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => {
+    const langClass = lang ? `language-${lang}` : "";
+    return `<pre class="iflow-code-block ${langClass}"><code>${escapeHtml(code.trim())}</code></pre>`;
+  });
+  result = result.replace(/`([^`]+)`/g, '<code class="iflow-inline-code">$1</code>');
+  result = result.replace(/\*\*([^*]+)\*\*/g, '<strong class="iflow-bold">$1</strong>');
+  result = result.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  result = result.replace(/^\*\s*(Thinking.+)$/gm, '<div class="iflow-thinking">$1</div>');
+  result = result.replace(/^### (.+)$/gm, '<h4 class="iflow-h4">$1</h4>');
+  result = result.replace(/^## (.+)$/gm, '<h3 class="iflow-h3">$1</h3>');
+  result = result.replace(/^# (.+)$/gm, '<h2 class="iflow-h2">$1</h2>');
+  result = result.replace(/^(\s*)[-*]\s+(.+)$/gm, (_match, spaces, text) => {
+    const indent = spaces.length;
+    return `<li class="iflow-li" style="margin-left: ${indent * 8}px">${text}</li>`;
+  });
+  result = result.replace(/^(\s*)(\d+)\.\s+(.+)$/gm, (_match, spaces, _num, text) => {
+    const indent = spaces.length;
+    return `<li class="iflow-li iflow-li-num" style="margin-left: ${indent * 8}px">${text}</li>`;
+  });
+  result = result.replace(/✅/g, '<span class="iflow-icon iflow-icon-success">\u2705</span>');
+  result = result.replace(/❌/g, '<span class="iflow-icon iflow-icon-error">\u274C</span>');
+  result = result.replace(/🔄/g, '<span class="iflow-icon iflow-icon-loading">\u{1F504}</span>');
+  result = result.replace(/◆/g, '<span class="iflow-icon iflow-icon-diamond">\u25C6</span>');
+  result = result.replace(
+    /([a-zA-Z0-9_\-/.]+\.(ts|js|tsx|jsx|py|md|json|yaml|yml|css|html))/g,
+    '<span class="iflow-file-path">$1</span>'
+  );
+  result = result.replace(/`([A-Za-z]+\+[A-Za-z+]+)`/g, '<kbd class="iflow-kbd">$1</kbd>');
+  result = result.replace(/\n/g, "<br>");
+  result = result.replace(/<\/(h[234]|pre|div|li)><br>/g, "</$1>");
+  result = result.replace(/<br><(h[234]|pre|div|li)/g, "<$1");
+  return result;
+}
+
+// src/ui/chat/messageListView.ts
+function resolveRoleLabel(role, labels) {
+  if (role === "user") return labels.user;
+  if (role === "assistant") return labels.assistant;
+  return role;
+}
+var MessageListView = class {
+  constructor(container, labels) {
+    this.container = container;
+    this.labels = labels;
+  }
+  appendMessage(role, content, id) {
+    const messageEl = this.container.createDiv({
+      cls: `iflow-message iflow-message-${role}`
+    });
+    messageEl.dataset.id = id;
+    messageEl.createDiv({ cls: "iflow-message-role", text: resolveRoleLabel(role, this.labels) });
+    const contentEl = messageEl.createDiv({ cls: "iflow-message-content" });
+    contentEl.innerHTML = renderMessage(content);
+  }
+  updateMessage(id, content) {
+    const messageEl = this.container.querySelector(`[data-id="${id}"]`);
+    if (!messageEl) return;
+    const contentEl = messageEl.querySelector(".iflow-message-content");
+    if (!contentEl) return;
+    contentEl.innerHTML = renderMessage(content);
+  }
+  showLoading(messageId, text) {
+    const contentEl = this.getMessageContentElement(messageId);
+    if (!contentEl) return;
+    contentEl.innerHTML = `
+			<div class="iflow-loading">
+				<div class="iflow-loading-dots">
+					<span></span>
+					<span></span>
+					<span></span>
+				</div>
+				<span class="iflow-loading-text">${text}</span>
+			</div>
+		`;
+  }
+  hideLoading(messageId) {
+    const messageEl = this.container.querySelector(`[data-id="${messageId}"]`);
+    if (!messageEl) return;
+    const loadingEl = messageEl.querySelector(".iflow-loading");
+    if (loadingEl) {
+      loadingEl.remove();
+    }
+  }
+  getMessageContentElement(messageId) {
+    const messageEl = this.container.querySelector(`[data-id="${messageId}"]`);
+    if (!messageEl) return null;
+    return messageEl.querySelector(".iflow-message-content");
+  }
+  scrollToBottom() {
+    requestAnimationFrame(() => {
+      this.container.scrollTop = this.container.scrollHeight;
+    });
+  }
+  loadConversation(messages) {
+    this.container.empty();
+    for (const msg of messages) {
+      this.appendMessage(msg.role, msg.content, msg.id);
+    }
+  }
+};
+
+// src/ui/chat/toolCallView.ts
+function formatToolStatusIcon(status) {
+  if (status === "completed") return "\u2705";
+  if (status === "error") return "\u274C";
+  return "\u{1F504}";
+}
+var ToolCallView = class {
+  constructor(labels) {
+    this.labels = labels;
+  }
+  showOrUpdate(messageContainer, tool) {
+    let toolContainer = messageContainer.querySelector(`.iflow-tool-call[data-tool-id="${tool.id}"]`);
+    if (!toolContainer) {
+      toolContainer = messageContainer.createDiv({
+        cls: `iflow-tool-call iflow-tool-status-${tool.status || "running"}`
+      });
+      toolContainer.dataset.toolId = tool.id;
+      const header = toolContainer.createDiv({ cls: "iflow-tool-header" });
+      header.createSpan({ cls: "iflow-tool-icon", text: formatToolStatusIcon(tool.status) });
+      header.createSpan({ cls: "iflow-tool-name", text: tool.name });
+      const details = toolContainer.createDiv({ cls: "iflow-tool-details" });
+      if (tool.input && Object.keys(tool.input).length > 0) {
+        details.createDiv({ cls: "iflow-tool-section-title", text: this.labels.params });
+        const inputPre = details.createEl("pre", { cls: "iflow-tool-input" });
+        inputPre.createEl("code", { text: JSON.stringify(tool.input, null, 2) });
+      }
+      return;
+    }
+    toolContainer.className = `iflow-tool-call iflow-tool-status-${tool.status || "running"}`;
+    const iconEl = toolContainer.querySelector(".iflow-tool-icon");
+    if (iconEl) {
+      iconEl.textContent = formatToolStatusIcon(tool.status);
+    }
+    if (tool.status === "completed" && tool.result) {
+      let resultEl = toolContainer.querySelector(".iflow-tool-result");
+      if (!resultEl) {
+        const details = toolContainer.querySelector(".iflow-tool-details");
+        if (details) {
+          details.createDiv({ cls: "iflow-tool-section-title", text: this.labels.result });
+          resultEl = details.createEl("pre", { cls: "iflow-tool-result" });
+          const resultText = typeof tool.result === "string" ? tool.result : JSON.stringify(tool.result, null, 2);
+          resultEl.createEl("code", { text: resultText });
+        }
+      }
+    }
+    if (tool.status === "error" && tool.error) {
+      let errorEl = toolContainer.querySelector(".iflow-tool-error");
+      if (!errorEl) {
+        const details = toolContainer.querySelector(".iflow-tool-details");
+        if (details) {
+          errorEl = details.createDiv({ cls: "iflow-tool-error" });
+          errorEl.createSpan({ text: `${this.labels.errorPrefix}${tool.error}` });
+        }
+      }
+    }
+  }
+};
+
+// src/ui/chat/imageAttachmentView.ts
 var MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 var IMAGE_EXTENSIONS = {
   ".jpg": "image/jpeg",
@@ -1409,6 +1186,252 @@ var IMAGE_EXTENSIONS = {
   ".gif": "image/gif",
   ".webp": "image/webp"
 };
+function getImageMediaType(filename) {
+  var _a;
+  const dotIndex = filename.lastIndexOf(".");
+  if (dotIndex < 0) {
+    return null;
+  }
+  const ext = filename.toLowerCase().substring(dotIndex);
+  return (_a = IMAGE_EXTENSIONS[ext]) != null ? _a : null;
+}
+function isSupportedImageFile(file) {
+  return file.type.startsWith("image/") && getImageMediaType(file.name) !== null;
+}
+function generateImageAttachmentId(now = Date.now(), randomValue = Math.random()) {
+  const randomPart = Math.floor(randomValue * 36).toString(36);
+  return `img-${now}-${randomPart}`;
+}
+function truncateImageName(name, maxLen) {
+  if (name.length <= maxLen) {
+    return name;
+  }
+  const dotIndex = name.lastIndexOf(".");
+  const ext = dotIndex >= 0 ? name.substring(dotIndex) : "";
+  const base = dotIndex >= 0 ? name.substring(0, dotIndex) : name;
+  const availableLength = Math.max(1, maxLen - ext.length - 3);
+  return `${base.substring(0, availableLength)}...${ext}`;
+}
+function formatImageSize(bytes) {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// src/domain/conversation/storageQuotaPolicy.ts
+var MAX_STORAGE_BYTES = 4 * 1024 * 1024;
+function cleanupOldConversations(conversations, currentConversationId, keepCount = 50) {
+  var _a;
+  const sorted = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt);
+  const kept = sorted.slice(0, keepCount);
+  const removedCount = Math.max(0, conversations.length - kept.length);
+  let nextCurrentConversationId = currentConversationId;
+  if (nextCurrentConversationId) {
+    const stillExists = kept.find((conversation) => conversation.id === nextCurrentConversationId);
+    if (!stillExists) {
+      nextCurrentConversationId = ((_a = kept[0]) == null ? void 0 : _a.id) || null;
+    }
+  }
+  return {
+    conversations: kept,
+    currentConversationId: nextCurrentConversationId,
+    removedCount
+  };
+}
+
+// src/domain/conversation/conversationService.ts
+var ConversationService = class {
+  constructor(repository) {
+    this.repository = repository;
+  }
+  getState() {
+    return this.repository.getState();
+  }
+  getCurrentConversation() {
+    const state = this.repository.getState();
+    if (!state.currentConversationId) {
+      return null;
+    }
+    return state.conversations.find((c) => c.id === state.currentConversationId) || null;
+  }
+  newConversation(defaultModel = "glm-4.7", defaultMode = "default", defaultThink = false) {
+    var _a, _b, _c;
+    const state = this.repository.getState();
+    const current = this.getCurrentConversation();
+    const conversation = {
+      id: `conv-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
+      title: "New Conversation",
+      messages: [],
+      mode: (_a = current == null ? void 0 : current.mode) != null ? _a : defaultMode,
+      think: (_b = current == null ? void 0 : current.think) != null ? _b : defaultThink,
+      model: (_c = current == null ? void 0 : current.model) != null ? _c : defaultModel,
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    this.repository.setState({
+      currentConversationId: conversation.id,
+      conversations: [conversation, ...state.conversations]
+    });
+    return conversation;
+  }
+  switchConversation(conversationId) {
+    const state = this.repository.getState();
+    if (!state.conversations.find((c) => c.id === conversationId)) {
+      return;
+    }
+    this.repository.setState({ ...state, currentConversationId: conversationId });
+  }
+  deleteConversation(conversationId) {
+    const state = this.repository.getState();
+    const conversations = state.conversations.filter((c) => c.id !== conversationId);
+    let currentConversationId = state.currentConversationId;
+    if (currentConversationId === conversationId) {
+      currentConversationId = conversations.length > 0 ? conversations[0].id : null;
+    }
+    this.repository.setState({ currentConversationId, conversations });
+  }
+  updateConversationSettings(conversationId, settings) {
+    const state = this.repository.getState();
+    const conversations = state.conversations.map(
+      (c) => c.id === conversationId ? { ...c, ...settings, updatedAt: Date.now() } : c
+    );
+    this.repository.setState({ ...state, conversations });
+  }
+  getConversationMessages(conversationId) {
+    var _a;
+    const state = this.repository.getState();
+    const conversation = state.conversations.find((c) => c.id === conversationId);
+    return (_a = conversation == null ? void 0 : conversation.messages) != null ? _a : [];
+  }
+  appendUserMessage(conversationId, content) {
+    const state = this.repository.getState();
+    const message = {
+      id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
+      role: "user",
+      content,
+      timestamp: Date.now()
+    };
+    const conversations = state.conversations.map((conversation) => {
+      if (conversation.id !== conversationId) {
+        return conversation;
+      }
+      const title = conversation.title === "New Conversation" ? this.generateTitle(content) : conversation.title;
+      return {
+        ...conversation,
+        title,
+        messages: [...conversation.messages, message],
+        updatedAt: Date.now()
+      };
+    });
+    const cleanupResult = cleanupOldConversations(conversations, state.currentConversationId, 50);
+    this.repository.setState({
+      currentConversationId: cleanupResult.currentConversationId,
+      conversations: cleanupResult.conversations
+    });
+    return message;
+  }
+  appendAssistantMessage(conversationId, content) {
+    const state = this.repository.getState();
+    const message = {
+      id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
+      role: "assistant",
+      content,
+      timestamp: Date.now()
+    };
+    const conversations = state.conversations.map((conversation) => {
+      if (conversation.id !== conversationId) {
+        return conversation;
+      }
+      return {
+        ...conversation,
+        messages: [...conversation.messages, message],
+        updatedAt: Date.now()
+      };
+    });
+    this.repository.setState({ ...state, conversations });
+    return message;
+  }
+  subscribe(listener) {
+    return this.repository.subscribe(listener);
+  }
+  generateTitle(firstMessage) {
+    const trimmed = firstMessage.trim();
+    return trimmed.length > 50 ? `${trimmed.substring(0, 47)}...` : trimmed;
+  }
+};
+
+// src/domain/conversation/conversationRepository.ts
+var STORAGE_VERSION = 1;
+var LocalStorageConversationRepository = class {
+  constructor(vaultPath, storage = localStorage) {
+    this.storage = storage;
+    this.listeners = /* @__PURE__ */ new Set();
+    this.storageKey = `iflow-conversations-${this.hashVaultPath(vaultPath)}`;
+    this.state = this.load();
+  }
+  getState() {
+    return {
+      currentConversationId: this.state.currentConversationId,
+      conversations: [...this.state.conversations]
+    };
+  }
+  setState(state) {
+    this.state = {
+      currentConversationId: state.currentConversationId,
+      conversations: [...state.conversations]
+    };
+    this.save();
+    this.listeners.forEach((listener) => listener());
+  }
+  subscribe(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  load() {
+    var _a, _b;
+    try {
+      const data = this.storage.getItem(this.storageKey);
+      if (data) {
+        const parsed = JSON.parse(data);
+        return {
+          currentConversationId: (_a = parsed.currentConversationId) != null ? _a : null,
+          conversations: (_b = parsed.conversations) != null ? _b : []
+        };
+      }
+    } catch (error) {
+      console.error("[ConversationRepository] Failed to load:", error);
+    }
+    return { currentConversationId: null, conversations: [] };
+  }
+  save() {
+    try {
+      const persisted = {
+        ...this.state,
+        version: STORAGE_VERSION,
+        updatedAt: Date.now()
+      };
+      this.storage.setItem(this.storageKey, JSON.stringify(persisted));
+    } catch (error) {
+      console.error("[ConversationRepository] Failed to save:", error);
+    }
+  }
+  hashVaultPath(path2) {
+    let hash = 0;
+    for (let i = 0; i < path2.length; i++) {
+      const char = path2.charCodeAt(i);
+      hash = (hash << 5) - hash + char;
+      hash = hash & hash;
+    }
+    return Math.abs(hash).toString(36);
+  }
+};
+
+// src/chatView.ts
+var VIEW_TYPE_IFLOW_CHAT = "iflow-chat-view";
 var IFlowChatView = class extends import_obsidian2.ItemView {
   constructor(leaf, plugin, iflowService) {
     super(leaf);
@@ -1441,8 +1464,9 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     this.thinkingEnabled = plugin.settings.lastUsedThinking || false;
     initI18n();
     const vaultPath = this.plugin.getVaultPath();
-    this.conversationStore = new ConversationStore(vaultPath);
-    this.conversationStore.subscribe(() => this.onConversationChange());
+    const repository = new LocalStorageConversationRepository(vaultPath);
+    this.conversationService = new ConversationService(repository);
+    this.conversationService.subscribe(() => this.onConversationChange());
   }
   getViewType() {
     return VIEW_TYPE_IFLOW_CHAT;
@@ -1472,6 +1496,15 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     this.contextIndicator = contextIndicator;
     const messagesContainer = chatContainer.createDiv({ cls: "iflow-messages" });
     this.messagesContainer = messagesContainer;
+    this.messageListView = new MessageListView(messagesContainer, {
+      user: t().roles.user,
+      assistant: t().roles.assistant
+    });
+    this.toolCallView = new ToolCallView({
+      params: t().tools.params,
+      result: t().tools.result,
+      errorPrefix: t().tools.error
+    });
     const inputContainer = chatContainer.createDiv({ cls: "iflow-input-container" });
     const inputWrapper = inputContainer.createDiv({ cls: "iflow-input-wrapper" });
     const textarea = inputWrapper.createEl("textarea", {
@@ -1498,7 +1531,7 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     this.initializeConversation();
   }
   initializeConversation() {
-    const state = this.conversationStore.getState();
+    const state = this.conversationService.getState();
     this.currentConversationId = state.currentConversationId;
     if (this.currentConversationId) {
       this.loadMessagesFromConversation();
@@ -1609,11 +1642,10 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     }
   }
   isImageFile(file) {
-    return file.type.startsWith("image/") && this.getMediaType(file.name) !== null;
+    return isSupportedImageFile(file);
   }
   getMediaType(filename) {
-    const ext = filename.toLowerCase().substring(filename.lastIndexOf("."));
-    return IMAGE_EXTENSIONS[ext] || null;
+    return getImageMediaType(filename);
   }
   async addImageFromFile(file, source) {
     if (file.size > MAX_IMAGE_SIZE) {
@@ -1656,7 +1688,7 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     });
   }
   generateImageId() {
-    return `img-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+    return generateImageAttachmentId();
   }
   updateImagePreview() {
     if (!this.imagePreviewEl) return;
@@ -1713,15 +1745,10 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     document.addEventListener("keydown", handleEsc);
   }
   truncateName(name, maxLen) {
-    if (name.length <= maxLen) return name;
-    const ext = name.substring(name.lastIndexOf("."));
-    const base = name.substring(0, name.length - ext.length);
-    return `${base.substring(0, maxLen - ext.length - 3)}...${ext}`;
+    return truncateImageName(name, maxLen);
   }
   formatSize(bytes) {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    return formatImageSize(bytes);
   }
   async sendMessage() {
     var _a;
@@ -1769,7 +1796,7 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     this.attachedImages.clear();
     this.updateImagePreview();
     if (this.currentConversationId) {
-      this.conversationStore.addUserMessage(this.currentConversationId, content);
+      this.conversationService.appendUserMessage(this.currentConversationId, content);
     }
     const assistantMsgId = this.addMessage("assistant", "");
     this.currentMessage = "";
@@ -1826,7 +1853,7 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
           console.log("[iFlow Chat] onEnd called, setting isStreaming = false");
           cleanup();
           if (this.currentConversationId && this.currentMessage) {
-            this.conversationStore.addAssistantMessage(
+            this.conversationService.appendAssistantMessage(
               this.currentConversationId,
               this.currentMessage
             );
@@ -1848,144 +1875,25 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
   addMessage(role, content) {
     const id = Date.now().toString();
     this.messages.push({ role, content, id });
-    const messageEl = this.messagesContainer.createDiv({
-      cls: `iflow-message iflow-message-${role}`
-    });
-    messageEl.dataset.id = id;
-    const roleEl = messageEl.createDiv({ cls: "iflow-message-role" });
-    roleEl.textContent = role === "user" ? t().roles.user : t().roles.assistant;
-    const contentEl = messageEl.createDiv({ cls: "iflow-message-content" });
-    contentEl.innerHTML = this.formatMessage(content);
+    this.messageListView.appendMessage(role, content, id);
     return id;
   }
   updateMessage(id, content) {
-    const messageEl = this.messagesContainer.querySelector(`[data-id="${id}"]`);
-    if (messageEl) {
-      const contentEl = messageEl.querySelector(".iflow-message-content");
-      if (contentEl) {
-        contentEl.innerHTML = this.formatMessage(content);
-      }
-    }
-  }
-  formatMessage(content) {
-    let result = content.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
-      const langClass = lang ? `language-${lang}` : "";
-      return `<pre class="iflow-code-block ${langClass}"><code>${this.escapeHtml(code.trim())}</code></pre>`;
-    });
-    result = result.replace(/`([^`]+)`/g, '<code class="iflow-inline-code">$1</code>');
-    result = result.replace(/\*\*([^*]+)\*\*/g, '<strong class="iflow-bold">$1</strong>');
-    result = result.replace(/\*([^*]+)\*/g, "<em>$1</em>");
-    result = result.replace(/^\*\s*(Thinking.+)$/gm, '<div class="iflow-thinking">$1</div>');
-    result = result.replace(/^### (.+)$/gm, '<h4 class="iflow-h4">$1</h4>');
-    result = result.replace(/^## (.+)$/gm, '<h3 class="iflow-h3">$1</h3>');
-    result = result.replace(/^# (.+)$/gm, '<h2 class="iflow-h2">$1</h2>');
-    result = result.replace(/^(\s*)[-*]\s+(.+)$/gm, (match, spaces, text) => {
-      const indent = spaces.length;
-      return `<li class="iflow-li" style="margin-left: ${indent * 8}px">${text}</li>`;
-    });
-    result = result.replace(/^(\s*)(\d+)\.\s+(.+)$/gm, (match, spaces, num, text) => {
-      const indent = spaces.length;
-      return `<li class="iflow-li iflow-li-num" style="margin-left: ${indent * 8}px">${text}</li>`;
-    });
-    result = result.replace(/✅/g, '<span class="iflow-icon iflow-icon-success">\u2705</span>');
-    result = result.replace(/❌/g, '<span class="iflow-icon iflow-icon-error">\u274C</span>');
-    result = result.replace(/🔄/g, '<span class="iflow-icon iflow-icon-loading">\u{1F504}</span>');
-    result = result.replace(/◆/g, '<span class="iflow-icon iflow-icon-diamond">\u25C6</span>');
-    result = result.replace(
-      /([a-zA-Z0-9_\-/.]+\.(ts|js|tsx|jsx|py|md|json|yaml|yml|css|html))/g,
-      '<span class="iflow-file-path">$1</span>'
-    );
-    result = result.replace(/`([A-Za-z]+\+[A-Za-z+]+)`/g, '<kbd class="iflow-kbd">$1</kbd>');
-    result = result.replace(/\n/g, "<br>");
-    result = result.replace(/<\/(h[234]|pre|div|li)><br>/g, "</$1>");
-    result = result.replace(/<br><(h[234]|pre|div|li)/g, "<$1");
-    return result;
-  }
-  escapeHtml(text) {
-    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+    this.messageListView.updateMessage(id, content);
   }
   showLoadingAnimation(messageId) {
-    const messageEl = this.messagesContainer.querySelector(`[data-id="${messageId}"]`);
-    if (!messageEl) return;
-    const contentEl = messageEl.querySelector(".iflow-message-content");
-    if (!contentEl) return;
-    contentEl.innerHTML = `
-			<div class="iflow-loading">
-				<div class="iflow-loading-dots">
-					<span></span>
-					<span></span>
-					<span></span>
-				</div>
-				<span class="iflow-loading-text">\u601D\u8003\u4E2D...</span>
-			</div>
-		`;
+    this.messageListView.showLoading(messageId, "\u601D\u8003\u4E2D...");
   }
   hideLoadingAnimation(messageId) {
-    const messageEl = this.messagesContainer.querySelector(`[data-id="${messageId}"]`);
-    if (!messageEl) return;
-    const loadingEl = messageEl.querySelector(".iflow-loading");
-    if (loadingEl) {
-      loadingEl.remove();
-    }
+    this.messageListView.hideLoading(messageId);
   }
   showOrUpdateToolCall(messageId, tool) {
-    const messageEl = this.messagesContainer.querySelector(`[data-id="${messageId}"]`);
-    if (!messageEl) return;
-    const contentEl = messageEl.querySelector(".iflow-message-content");
+    const contentEl = this.messageListView.getMessageContentElement(messageId);
     if (!contentEl) return;
-    let toolContainer = contentEl.querySelector(`.iflow-tool-call[data-tool-id="${tool.id}"]`);
-    if (!toolContainer) {
-      toolContainer = contentEl.createDiv({
-        cls: `iflow-tool-call iflow-tool-status-${tool.status || "running"}`
-      });
-      toolContainer.dataset.toolId = tool.id;
-      const header = toolContainer.createDiv({ cls: "iflow-tool-header" });
-      const statusIcon = tool.status === "completed" ? "\u2705" : tool.status === "error" ? "\u274C" : "\u{1F504}";
-      header.createSpan({ cls: "iflow-tool-icon", text: statusIcon });
-      header.createSpan({ cls: "iflow-tool-name", text: tool.name });
-      const details = toolContainer.createDiv({ cls: "iflow-tool-details" });
-      if (tool.input && Object.keys(tool.input).length > 0) {
-        details.createDiv({ cls: "iflow-tool-section-title", text: t().tools.params });
-        const inputPre = details.createEl("pre", { cls: "iflow-tool-input" });
-        inputPre.createEl("code", { text: JSON.stringify(tool.input, null, 2) });
-      }
-    } else {
-      toolContainer.className = `iflow-tool-call iflow-tool-status-${tool.status || "running"}`;
-      const iconEl = toolContainer.querySelector(".iflow-tool-icon");
-      if (iconEl) {
-        iconEl.textContent = tool.status === "completed" ? "\u2705" : tool.status === "error" ? "\u274C" : "\u{1F504}";
-      }
-      if (tool.status === "completed" && tool.result) {
-        let resultEl = toolContainer.querySelector(".iflow-tool-result");
-        if (!resultEl) {
-          const details = toolContainer.querySelector(".iflow-tool-details");
-          if (details) {
-            details.createDiv({ cls: "iflow-tool-section-title", text: t().tools.result });
-            resultEl = details.createEl("pre", { cls: "iflow-tool-result" });
-            const resultText = typeof tool.result === "string" ? tool.result : JSON.stringify(tool.result, null, 2);
-            resultEl.createEl("code", { text: resultText });
-          }
-        }
-      }
-      if (tool.status === "error" && tool.error) {
-        let errorEl = toolContainer.querySelector(".iflow-tool-error");
-        if (!errorEl) {
-          const details = toolContainer.querySelector(".iflow-tool-details");
-          if (details) {
-            errorEl = details.createDiv({ cls: "iflow-tool-error" });
-            errorEl.createSpan({ text: `${t().tools.error}${tool.error}` });
-          }
-        }
-      }
-    }
+    this.toolCallView.showOrUpdate(contentEl, tool);
   }
   scrollToBottom() {
-    requestAnimationFrame(() => {
-      this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
-    });
-    setTimeout(() => {
-      this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
-    }, 10);
+    this.messageListView.scrollToBottom();
   }
   // ============================================
   // UI Component Creators
@@ -2261,7 +2169,7 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
   }
   renderConversationList(listContainer, searchQuery = "") {
     listContainer.empty();
-    const state = this.conversationStore.getState();
+    const state = this.conversationService.getState();
     const filteredConversations = state.conversations.filter(
       (c) => c.title.toLowerCase().includes(searchQuery.toLowerCase())
     );
@@ -2345,7 +2253,7 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     return date.toLocaleDateString();
   }
   updateConversationMeta(meta) {
-    const current = this.conversationStore.getCurrentConversation();
+    const current = this.conversationService.getCurrentConversation();
     if (current) {
       meta.textContent = `${current.messages.length} ${t().ui.messages}`;
     } else {
@@ -2363,9 +2271,9 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
       return;
     }
     this.isLoadingMessages = true;
-    const state = this.conversationStore.getState();
+    const state = this.conversationService.getState();
     this.currentConversationId = state.currentConversationId;
-    const current = this.conversationStore.getCurrentConversation();
+    const current = this.conversationService.getCurrentConversation();
     if (this.conversationTitleEl && current) {
       this.conversationTitleEl.textContent = current.title;
     }
@@ -2381,7 +2289,7 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     this.isLoadingMessages = false;
   }
   updateConversationUI() {
-    const current = this.conversationStore.getCurrentConversation();
+    const current = this.conversationService.getCurrentConversation();
     if (!current) return;
     if (this.conversationTitleEl) {
       this.conversationTitleEl.textContent = current.title;
@@ -2397,7 +2305,7 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
   }
   createNewConversation() {
     this.closeConversationPanel();
-    this.conversationStore.newConversation(
+    this.conversationService.newConversation(
       this.currentModel,
       this.currentMode,
       this.thinkingEnabled
@@ -2428,38 +2336,28 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     }
   }
   switchConversation(conversationId) {
-    this.conversationStore.switchConversation(conversationId);
+    this.conversationService.switchConversation(conversationId);
     this.closeConversationPanel();
   }
   deleteConversation(conversationId) {
-    this.conversationStore.deleteConversation(conversationId);
+    this.conversationService.deleteConversation(conversationId);
   }
   loadMessagesFromConversation() {
     this.messagesContainer.empty();
     this.isStreaming = false;
     this.currentMessage = "";
-    const current = this.conversationStore.getCurrentConversation();
+    const current = this.conversationService.getCurrentConversation();
     if (!current) {
       this.addWelcomeMessage();
       this.messages = [];
       return;
     }
     this.messages = [];
+    this.messageListView.loadConversation(current.messages);
     current.messages.forEach((msg) => {
-      this.addMessageToUI(msg.role, msg.content, msg.id);
       this.messages.push({ role: msg.role, content: msg.content, id: msg.id });
     });
     this.scrollToBottom();
-  }
-  addMessageToUI(role, content, id) {
-    const messageEl = this.messagesContainer.createDiv({
-      cls: `iflow-message iflow-message-${role}`
-    });
-    messageEl.dataset.id = id;
-    const roleEl = messageEl.createDiv({ cls: "iflow-message-role" });
-    roleEl.textContent = role === "user" ? t().roles.user : t().roles.assistant;
-    const contentEl = messageEl.createDiv({ cls: "iflow-message-content" });
-    contentEl.innerHTML = this.formatMessage(content);
   }
   // ============================================
   // Update available options from iFlow CLI
@@ -2471,6 +2369,48 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     this.availableModes = modes;
   }
 };
+
+// src/app/settingsService.ts
+var SettingsService = class {
+  constructor(plugin) {
+    this.plugin = plugin;
+  }
+  async load() {
+    await this.plugin.loadSettings();
+    return this.plugin.settings;
+  }
+  get() {
+    return this.plugin.settings;
+  }
+  async update(partial) {
+    this.plugin.settings = { ...this.plugin.settings, ...partial };
+    await this.plugin.saveSettings();
+    return this.plugin.settings;
+  }
+};
+
+// src/app/sdkProcessManager.ts
+var SdkProcessManager = class {
+  constructor(plugin) {
+    this.plugin = plugin;
+  }
+  async ensureRunning(forceRestart = false) {
+    const success = await this.plugin.ensureSdkRunning(forceRestart);
+    return { success };
+  }
+  async start() {
+    const success = await this.plugin.startSdk();
+    return { success };
+  }
+};
+
+// src/app/pluginBootstrap.ts
+function bootstrap(plugin) {
+  return {
+    settingsService: new SettingsService(plugin),
+    sdkProcessManager: new SdkProcessManager(plugin)
+  };
+}
 
 // src/main.ts
 var { spawn } = require("child_process");
@@ -2493,13 +2433,15 @@ var IFlowPlugin = class extends import_obsidian3.Plugin {
     super(...arguments);
     this.chatView = null;
     this.sdkProcess = null;
+    // Keep reference to SDK process
+    this.runtime = null;
   }
-  // Keep reference to SDK process
   async onload() {
     console.log("Loading iFlow for Obsidian plugin");
     await this.loadSettings();
     initI18n(this.settings.language);
     this.iflowService = new IFlowService(this.settings.iflowPort, this.settings.iflowTimeout, this.app);
+    this.runtime = bootstrap(this);
     this.registerView(
       VIEW_TYPE_IFLOW_CHAT,
       (leaf) => this.chatView = new IFlowChatView(leaf, this, this.iflowService)

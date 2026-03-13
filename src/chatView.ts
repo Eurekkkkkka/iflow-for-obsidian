@@ -1,37 +1,25 @@
 import { ItemView, WorkspaceLeaf, TFile, MarkdownView, Notice } from 'obsidian';
 import IFlowPlugin from './main';
 import { IFlowService } from './iflowService';
-import { ConversationStore, type Conversation, type Message } from './conversationStore';
+import { type Conversation, type Message } from './conversationStore';
 import type { IFlowSettings } from './main';
 import { initI18n, t, format } from './i18n';
+import { MessageListView } from './ui/chat/messageListView';
+import { ToolCallView } from './ui/chat/toolCallView';
+import { type ImageMediaType, type ImageAttachment, MAX_IMAGE_SIZE, getImageMediaType, isSupportedImageFile, generateImageAttachmentId, truncateImageName, formatImageSize } from './ui/chat/imageAttachmentView';
+import { ConversationService } from './domain/conversation/conversationService';
+import { LocalStorageConversationRepository } from './domain/conversation/conversationRepository';
 
 export const VIEW_TYPE_IFLOW_CHAT = 'iflow-chat-view';
 
-// Image attachment types
-export type ImageMediaType = 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp';
-
-export interface ImageAttachment {
-	id: string;
-	name: string;
-	mediaType: ImageMediaType;
-	data: string;  // base64
-	size: number;
-	source: 'paste' | 'drop';
-}
-
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
-const IMAGE_EXTENSIONS: Record<string, ImageMediaType> = {
-	'.jpg': 'image/jpeg',
-	'.jpeg': 'image/jpeg',
-	'.png': 'image/png',
-	'.gif': 'image/gif',
-	'.webp': 'image/webp',
-};
+export type { ImageMediaType, ImageAttachment };
 
 export class IFlowChatView extends ItemView {
 	plugin: IFlowPlugin;
 	iflowService: IFlowService;
-	private conversationStore: ConversationStore;
+	private conversationService: ConversationService;
+	private messageListView!: MessageListView;
+	private toolCallView!: ToolCallView;
 	private messages: { role: string; content: string; id: string }[] = [];
 	private currentMessage = '';
 	private isStreaming = false;
@@ -80,10 +68,11 @@ export class IFlowChatView extends ItemView {
 
 		// 获取 vault 路径用于会话隔离存储
 		const vaultPath = this.plugin.getVaultPath();
-		this.conversationStore = new ConversationStore(vaultPath);
+		const repository = new LocalStorageConversationRepository(vaultPath);
+		this.conversationService = new ConversationService(repository);
 
 		// Subscribe to conversation changes
-		this.conversationStore.subscribe(() => this.onConversationChange());
+		this.conversationService.subscribe(() => this.onConversationChange());
 	}
 
 	getViewType(): string {
@@ -136,6 +125,17 @@ export class IFlowChatView extends ItemView {
 		const messagesContainer = chatContainer.createDiv({ cls: 'iflow-messages' });
 		this.messagesContainer = messagesContainer;
 
+		// Initialize UI sub-components
+		this.messageListView = new MessageListView(messagesContainer, {
+			user: t().roles.user,
+			assistant: t().roles.assistant,
+		});
+		this.toolCallView = new ToolCallView({
+			params: t().tools.params,
+			result: t().tools.result,
+			errorPrefix: t().tools.error,
+		});
+
 		// Input container - fixed at bottom
 		const inputContainer = chatContainer.createDiv({ cls: 'iflow-input-container' });
 
@@ -178,7 +178,7 @@ export class IFlowChatView extends ItemView {
 	}
 
 	private initializeConversation(): void {
-		const state = this.conversationStore.getState();
+		const state = this.conversationService.getState();
 		this.currentConversationId = state.currentConversationId;
 
 		if (this.currentConversationId) {
@@ -322,12 +322,11 @@ export class IFlowChatView extends ItemView {
 	}
 
 	private isImageFile(file: File): boolean {
-		return file.type.startsWith('image/') && this.getMediaType(file.name) !== null;
+		return isSupportedImageFile(file);
 	}
 
 	private getMediaType(filename: string): ImageMediaType | null {
-		const ext = filename.toLowerCase().substring(filename.lastIndexOf('.'));
-		return IMAGE_EXTENSIONS[ext] || null;
+		return getImageMediaType(filename);
 	}
 
 	private async addImageFromFile(file: File, source: 'paste' | 'drop'): Promise<boolean> {
@@ -377,7 +376,7 @@ export class IFlowChatView extends ItemView {
 	}
 
 	private generateImageId(): string {
-		return `img-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+		return generateImageAttachmentId();
 	}
 
 	private updateImagePreview() {
@@ -451,16 +450,11 @@ export class IFlowChatView extends ItemView {
 	}
 
 	private truncateName(name: string, maxLen: number): string {
-		if (name.length <= maxLen) return name;
-		const ext = name.substring(name.lastIndexOf('.'));
-		const base = name.substring(0, name.length - ext.length);
-		return `${base.substring(0, maxLen - ext.length - 3)}...${ext}`;
+		return truncateImageName(name, maxLen);
 	}
 
 	private formatSize(bytes: number): string {
-		if (bytes < 1024) return `${bytes} B`;
-		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-		return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+		return formatImageSize(bytes);
 	}
 
 	private streamingTimeout: NodeJS.Timeout | null = null;
@@ -530,7 +524,7 @@ export class IFlowChatView extends ItemView {
 
 		// Add user message to conversation
 		if (this.currentConversationId) {
-			this.conversationStore.addUserMessage(this.currentConversationId, content);
+			this.conversationService.appendUserMessage(this.currentConversationId, content);
 		}
 
 		// Add assistant message placeholder with loading state
@@ -606,7 +600,7 @@ export class IFlowChatView extends ItemView {
 
 					// Save assistant message to conversation
 					if (this.currentConversationId && this.currentMessage) {
-						this.conversationStore.addAssistantMessage(
+						this.conversationService.appendAssistantMessage(
 							this.currentConversationId,
 							this.currentMessage
 						);
@@ -631,215 +625,30 @@ export class IFlowChatView extends ItemView {
 	private addMessage(role: string, content: string): string {
 		const id = Date.now().toString();
 		this.messages.push({ role, content, id });
-
-		const messageEl = this.messagesContainer.createDiv({
-			cls: `iflow-message iflow-message-${role}`,
-		});
-		messageEl.dataset.id = id;
-
-		const roleEl = messageEl.createDiv({ cls: 'iflow-message-role' });
-		roleEl.textContent = role === 'user' ? t().roles.user : t().roles.assistant;
-
-		const contentEl = messageEl.createDiv({ cls: 'iflow-message-content' });
-		contentEl.innerHTML = this.formatMessage(content);
-
+		this.messageListView.appendMessage(role, content, id);
 		return id;
 	}
 
 	private updateMessage(id: string, content: string): void {
-		const messageEl = this.messagesContainer.querySelector(`[data-id="${id}"]`);
-		if (messageEl) {
-			const contentEl = messageEl.querySelector('.iflow-message-content');
-			if (contentEl) {
-				contentEl.innerHTML = this.formatMessage(content);
-			}
-		}
-	}
-
-	private formatMessage(content: string): string {
-		// Enhanced markdown formatting with syntax highlighting
-		
-		// First handle code blocks (to prevent inner formatting)
-		let result = content.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
-			const langClass = lang ? `language-${lang}` : '';
-			return `<pre class="iflow-code-block ${langClass}"><code>${this.escapeHtml(code.trim())}</code></pre>`;
-		});
-		
-		// Handle inline code
-		result = result.replace(/`([^`]+)`/g, '<code class="iflow-inline-code">$1</code>');
-		
-		// Handle bold text
-		result = result.replace(/\*\*([^*]+)\*\*/g, '<strong class="iflow-bold">$1</strong>');
-		
-		// Handle italic text
-		result = result.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-		
-		// Handle thinking blocks (like * Thinking...)
-		result = result.replace(/^\*\s*(Thinking.+)$/gm, '<div class="iflow-thinking">$1</div>');
-		
-		// Handle headers
-		result = result.replace(/^### (.+)$/gm, '<h4 class="iflow-h4">$1</h4>');
-		result = result.replace(/^## (.+)$/gm, '<h3 class="iflow-h3">$1</h3>');
-		result = result.replace(/^# (.+)$/gm, '<h2 class="iflow-h2">$1</h2>');
-		
-		// Handle bullet points with proper nesting
-		result = result.replace(/^(\s*)[-*]\s+(.+)$/gm, (match, spaces, text) => {
-			const indent = spaces.length;
-			return `<li class="iflow-li" style="margin-left: ${indent * 8}px">${text}</li>`;
-		});
-		
-		// Handle numbered lists
-		result = result.replace(/^(\s*)(\d+)\.\s+(.+)$/gm, (match, spaces, num, text) => {
-			const indent = spaces.length;
-			return `<li class="iflow-li iflow-li-num" style="margin-left: ${indent * 8}px">${text}</li>`;
-		});
-		
-		// Handle checkmarks and status icons
-		result = result.replace(/✅/g, '<span class="iflow-icon iflow-icon-success">✅</span>');
-		result = result.replace(/❌/g, '<span class="iflow-icon iflow-icon-error">❌</span>');
-		result = result.replace(/🔄/g, '<span class="iflow-icon iflow-icon-loading">🔄</span>');
-		result = result.replace(/◆/g, '<span class="iflow-icon iflow-icon-diamond">◆</span>');
-		
-		// Handle file paths (highlight as code-like)
-		result = result.replace(/([a-zA-Z0-9_\-/.]+\.(ts|js|tsx|jsx|py|md|json|yaml|yml|css|html))/g, 
-			'<span class="iflow-file-path">$1</span>');
-		
-		// Handle keyboard shortcuts
-		result = result.replace(/`([A-Za-z]+\+[A-Za-z+]+)`/g, '<kbd class="iflow-kbd">$1</kbd>');
-		
-		// Convert newlines to <br> (but not after block elements)
-		result = result.replace(/\n/g, '<br>');
-		
-		// Clean up extra breaks after block elements
-		result = result.replace(/<\/(h[234]|pre|div|li)><br>/g, '</$1>');
-		result = result.replace(/<br><(h[234]|pre|div|li)/g, '<$1');
-		
-		return result;
-	}
-
-	private escapeHtml(text: string): string {
-		return text
-			.replace(/&/g, '&amp;')
-			.replace(/</g, '&lt;')
-			.replace(/>/g, '&gt;')
-			.replace(/"/g, '&quot;')
-			.replace(/'/g, '&#039;');
+		this.messageListView.updateMessage(id, content);
 	}
 
 	private showLoadingAnimation(messageId: string): void {
-		const messageEl = this.messagesContainer.querySelector(`[data-id="${messageId}"]`);
-		if (!messageEl) return;
-
-		const contentEl = messageEl.querySelector('.iflow-message-content');
-		if (!contentEl) return;
-
-		// Create loading indicator
-		contentEl.innerHTML = `
-			<div class="iflow-loading">
-				<div class="iflow-loading-dots">
-					<span></span>
-					<span></span>
-					<span></span>
-				</div>
-				<span class="iflow-loading-text">思考中...</span>
-			</div>
-		`;
+		this.messageListView.showLoading(messageId, '思考中...');
 	}
 
 	private hideLoadingAnimation(messageId: string): void {
-		const messageEl = this.messagesContainer.querySelector(`[data-id="${messageId}"]`);
-		if (!messageEl) return;
-
-		const loadingEl = messageEl.querySelector('.iflow-loading');
-		if (loadingEl) {
-			loadingEl.remove();
-		}
+		this.messageListView.hideLoading(messageId);
 	}
 
 	private showOrUpdateToolCall(messageId: string, tool: import('./iflowService').IFlowToolCall): void {
-		const messageEl = this.messagesContainer.querySelector(`[data-id="${messageId}"]`);
-		if (!messageEl) return;
-
-		const contentEl = messageEl.querySelector('.iflow-message-content');
+		const contentEl = this.messageListView.getMessageContentElement(messageId);
 		if (!contentEl) return;
-
-		// Find or create tool call container
-		let toolContainer = contentEl.querySelector(`.iflow-tool-call[data-tool-id="${tool.id}"]`);
-
-		if (!toolContainer) {
-			// Create new tool call element
-			toolContainer = contentEl.createDiv({
-				cls: `iflow-tool-call iflow-tool-status-${tool.status || 'running'}`,
-			});
-			(toolContainer as any).dataset.toolId = tool.id;
-
-			// Tool header
-			const header = toolContainer.createDiv({ cls: 'iflow-tool-header' });
-
-			const statusIcon = tool.status === 'completed' ? '✅' :
-			                   tool.status === 'error' ? '❌' : '🔄';
-
-			header.createSpan({ cls: 'iflow-tool-icon', text: statusIcon });
-			header.createSpan({ cls: 'iflow-tool-name', text: tool.name });
-
-			// Tool details (collapsible)
-			const details = toolContainer.createDiv({ cls: 'iflow-tool-details' });
-
-			if (tool.input && Object.keys(tool.input).length > 0) {
-				details.createDiv({ cls: 'iflow-tool-section-title', text: t().tools.params });
-				const inputPre = details.createEl('pre', { cls: 'iflow-tool-input' });
-				inputPre.createEl('code', { text: JSON.stringify(tool.input, null, 2) });
-			}
-		} else {
-			// Update existing tool call
-			toolContainer.className = `iflow-tool-call iflow-tool-status-${tool.status || 'running'}`;
-
-			const iconEl = toolContainer.querySelector('.iflow-tool-icon');
-			if (iconEl) {
-				iconEl.textContent = tool.status === 'completed' ? '✅' :
-				                    tool.status === 'error' ? '❌' : '🔄';
-			}
-
-			// Add result if completed
-			if (tool.status === 'completed' && tool.result) {
-				let resultEl = toolContainer.querySelector('.iflow-tool-result');
-				if (!resultEl) {
-					const details = toolContainer.querySelector('.iflow-tool-details');
-					if (details) {
-						details.createDiv({ cls: 'iflow-tool-section-title', text: t().tools.result });
-						resultEl = details.createEl('pre', { cls: 'iflow-tool-result' });
-						const resultText = typeof tool.result === 'string'
-							? tool.result
-							: JSON.stringify(tool.result, null, 2);
-						resultEl.createEl('code', { text: resultText });
-					}
-				}
-			}
-
-			// Add error if failed
-			if (tool.status === 'error' && tool.error) {
-				let errorEl = toolContainer.querySelector('.iflow-tool-error');
-				if (!errorEl) {
-					const details = toolContainer.querySelector('.iflow-tool-details');
-					if (details) {
-						errorEl = details.createDiv({ cls: 'iflow-tool-error' });
-						errorEl.createSpan({ text: `${t().tools.error}${tool.error}` });
-					}
-				}
-			}
-		}
+		this.toolCallView.showOrUpdate(contentEl, tool);
 	}
 
 	private scrollToBottom(): void {
-		// Use requestAnimationFrame to ensure DOM has updated
-		requestAnimationFrame(() => {
-			this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
-		});
-
-		// Double-check with a small delay to handle async updates
-		setTimeout(() => {
-			this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
-		}, 10);
+		this.messageListView.scrollToBottom();
 	}
 
 	// ============================================
@@ -1209,7 +1018,7 @@ export class IFlowChatView extends ItemView {
 	private renderConversationList(listContainer: HTMLElement, searchQuery: string = ''): void {
 		listContainer.empty();
 
-		const state = this.conversationStore.getState();
+		const state = this.conversationService.getState();
 
 		// Filter conversations by search query
 		const filteredConversations = state.conversations.filter(c =>
@@ -1316,7 +1125,7 @@ export class IFlowChatView extends ItemView {
 	}
 
 	private updateConversationMeta(meta: HTMLElement): void {
-		const current = this.conversationStore.getCurrentConversation();
+		const current = this.conversationService.getCurrentConversation();
 		if (current) {
 			meta.textContent = `${current.messages.length} ${t().ui.messages}`;
 		} else {
@@ -1341,11 +1150,11 @@ export class IFlowChatView extends ItemView {
 
 		this.isLoadingMessages = true;
 
-		const state = this.conversationStore.getState();
+		const state = this.conversationService.getState();
 		this.currentConversationId = state.currentConversationId;
 
 		// Update title
-		const current = this.conversationStore.getCurrentConversation();
+		const current = this.conversationService.getCurrentConversation();
 		if (this.conversationTitleEl && current) {
 			this.conversationTitleEl.textContent = current.title;
 		}
@@ -1370,7 +1179,7 @@ export class IFlowChatView extends ItemView {
 
 	private updateConversationUI(): void {
 		// 只更新元数据（标题、消息数量等），不重新加载消息
-		const current = this.conversationStore.getCurrentConversation();
+		const current = this.conversationService.getCurrentConversation();
 		if (!current) return;
 
 		// Update title
@@ -1396,7 +1205,7 @@ export class IFlowChatView extends ItemView {
 		this.closeConversationPanel();
 
 		// Create new conversation via store - this will trigger onConversationChange
-		this.conversationStore.newConversation(
+		this.conversationService.newConversation(
 			this.currentModel as any,
 			this.currentMode as any,
 			this.thinkingEnabled
@@ -1436,14 +1245,14 @@ export class IFlowChatView extends ItemView {
 	}
 
 	private switchConversation(conversationId: string): void {
-		this.conversationStore.switchConversation(conversationId);
+		this.conversationService.switchConversation(conversationId);
 		// Close panel after switching
 		this.closeConversationPanel();
 		// onConversationChange will be called automatically
 	}
 
 	private deleteConversation(conversationId: string): void {
-		this.conversationStore.deleteConversation(conversationId);
+		this.conversationService.deleteConversation(conversationId);
 		// onConversationChange will be called automatically
 	}
 
@@ -1454,7 +1263,7 @@ export class IFlowChatView extends ItemView {
 		this.isStreaming = false;
 		this.currentMessage = '';
 
-		const current = this.conversationStore.getCurrentConversation();
+		const current = this.conversationService.getCurrentConversation();
 		if (!current) {
 			// Show welcome message if no conversation
 			this.addWelcomeMessage();
@@ -1465,28 +1274,14 @@ export class IFlowChatView extends ItemView {
 		// Clear and reload messages array
 		this.messages = [];
 
-		// Load messages from conversation
+		// Load messages from conversation using messageListView
+		this.messageListView.loadConversation(current.messages);
 		current.messages.forEach(msg => {
-			this.addMessageToUI(msg.role, msg.content, msg.id);
-			// Also add to messages array
 			this.messages.push({ role: msg.role, content: msg.content, id: msg.id });
 		});
 
 		// Scroll to bottom
 		this.scrollToBottom();
-	}
-
-	private addMessageToUI(role: string, content: string, id: string): void {
-		const messageEl = this.messagesContainer.createDiv({
-			cls: `iflow-message iflow-message-${role}`,
-		});
-		messageEl.dataset.id = id;
-
-		const roleEl = messageEl.createDiv({ cls: 'iflow-message-role' });
-		roleEl.textContent = role === 'user' ? t().roles.user : t().roles.assistant;
-
-		const contentEl = messageEl.createDiv({ cls: 'iflow-message-content' });
-		contentEl.innerHTML = this.formatMessage(content);
 	}
 
 	// ============================================

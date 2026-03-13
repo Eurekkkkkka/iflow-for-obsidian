@@ -1,5 +1,16 @@
 // 会话存储管理 - 支持版本控制、配额管理、导出导入
 
+import {
+	calculateStorageQuotaInfo,
+	cleanupOldConversations,
+	type StorageQuotaInfo,
+	MAX_STORAGE_BYTES,
+} from './domain/conversation/storageQuotaPolicy';
+import {
+	exportConversationsToJson,
+	exportConversationsToMarkdown,
+} from './domain/conversation/conversationExportService';
+
 export type ConversationMode = "default" | "yolo" | "plan" | "smart";
 
 export type ModelType =
@@ -44,19 +55,7 @@ interface PersistedState extends ConversationState {
 	updatedAt: number;
 }
 
-// 存储配额信息
-interface StorageQuotaInfo {
-	usedBytes: number;
-	totalBytes: number;
-	percentUsed: number;
-	approachingLimit: boolean; // 超过 80%
-	atLimit: boolean; // 超过 95%
-}
-
 const STORAGE_VERSION = 1;
-const MAX_STORAGE_BYTES = 4 * 1024 * 1024; // 4MB 限制（localStorage 通常是 5-10MB）
-const WARNING_THRESHOLD = 0.8; // 80% 警告
-const CRITICAL_THRESHOLD = 0.95; // 95% 严重警告
 
 export class ConversationStore {
 	private state: ConversationState;
@@ -159,24 +158,16 @@ export class ConversationStore {
 
 	// 清理旧会话以释放空间
 	private cleanupOldConversations(): void {
-		const conversations = [...this.state.conversations];
-		const originalCount = conversations.length;
+		const result = cleanupOldConversations(
+			this.state.conversations,
+			this.state.currentConversationId,
+			50,
+		);
 
-		// 按更新时间排序，保留最近的 50 个会话
-		conversations.sort((a, b) => b.updatedAt - a.updatedAt);
-		const kept = conversations.slice(0, 50);
-
-		if (kept.length < originalCount) {
-			console.log(`[ConversationStore] Cleaned up ${originalCount - kept.length} old conversations`);
-			this.state.conversations = kept;
-
-			// 如果当前会话被删除，切换到第一个可用会话
-			if (this.state.currentConversationId) {
-				const stillExists = kept.find(c => c.id === this.state.currentConversationId);
-				if (!stillExists) {
-					this.state.currentConversationId = kept[0]?.id || null;
-				}
-			}
+		if (result.removedCount > 0) {
+			console.log(`[ConversationStore] Cleaned up ${result.removedCount} old conversations`);
+			this.state.conversations = result.conversations;
+			this.state.currentConversationId = result.currentConversationId;
 		}
 	}
 
@@ -212,25 +203,10 @@ export class ConversationStore {
 	getStorageQuota(): StorageQuotaInfo {
 		try {
 			const data = localStorage.getItem(this.storageKey);
-			const usedBytes = data ? new Blob([data]).size : 0;
-			const percentUsed = usedBytes / MAX_STORAGE_BYTES;
-
-			return {
-				usedBytes,
-				totalBytes: MAX_STORAGE_BYTES,
-				percentUsed,
-				approachingLimit: percentUsed >= WARNING_THRESHOLD,
-				atLimit: percentUsed >= CRITICAL_THRESHOLD,
-			};
+			return calculateStorageQuotaInfo(data);
 		} catch (error) {
 			console.error("[ConversationStore] Failed to calculate storage quota:", error);
-			return {
-				usedBytes: 0,
-				totalBytes: MAX_STORAGE_BYTES,
-				percentUsed: 0,
-				approachingLimit: false,
-				atLimit: false,
-			};
+			return calculateStorageQuotaInfo(null);
 		}
 	}
 
@@ -410,13 +386,7 @@ export class ConversationStore {
 
 	// 导出为 JSON
 	exportToJSON(): string {
-		const exported = {
-			version: STORAGE_VERSION,
-			exportedAt: new Date().toISOString(),
-			conversations: this.state.conversations,
-			currentConversationId: this.state.currentConversationId,
-		};
-		return JSON.stringify(exported, null, 2);
+		return exportConversationsToJson(this.state);
 	}
 
 	// 导出为 Markdown
@@ -424,30 +394,7 @@ export class ConversationStore {
 		const conversationsToExport = conversationId
 			? this.state.conversations.filter(c => c.id === conversationId)
 			: this.state.conversations;
-
-		const mdLines: string[] = [];
-
-		conversationsToExport.forEach(conv => {
-			mdLines.push(`# ${conv.title}`);
-			mdLines.push("");
-			mdLines.push(`**Created:** ${new Date(conv.createdAt).toLocaleString()}`);
-			mdLines.push(`**Model:** ${conv.model}`);
-			mdLines.push(`**Mode:** ${conv.mode}`);
-			mdLines.push("");
-
-			conv.messages.forEach(msg => {
-				const role = msg.role === "user" ? "👤 **You**" : "🤖 **iFlow**";
-				mdLines.push(`## ${role}`);
-				mdLines.push("");
-				mdLines.push(msg.content);
-				mdLines.push("");
-			});
-
-			mdLines.push("---");
-			mdLines.push("");
-		});
-
-		return mdLines.join("\n");
+		return exportConversationsToMarkdown(conversationsToExport);
 	}
 
 	// 从 JSON 导入

@@ -2,6 +2,7 @@ import { App, Plugin, PluginSettingTab, Setting, Notice, WorkspaceLeaf, TFile, M
 import { IFlowService } from './iflowService';
 import { IFlowChatView, VIEW_TYPE_IFLOW_CHAT } from './chatView';
 import { initI18n, t } from './i18n';
+import { bootstrap, type PluginRuntime } from './app/pluginBootstrap';
 
 // Import Node.js modules for process management (Electron environment)
 declare const require: (module: string) => any;
@@ -42,6 +43,7 @@ export default class IFlowPlugin extends Plugin {
 	iflowService: IFlowService;
 	chatView: IFlowChatView | null = null;
 	sdkProcess: any = null;  // Keep reference to SDK process
+	runtime: PluginRuntime | null = null;
 
 	async onload() {
 		console.log('Loading iFlow for Obsidian plugin');
@@ -54,6 +56,7 @@ export default class IFlowPlugin extends Plugin {
 
 		// Initialize iFlow service
 		this.iflowService = new IFlowService(this.settings.iflowPort, this.settings.iflowTimeout, this.app);
+		this.runtime = bootstrap(this);
 
 		// Register sidebar view
 		this.registerView(

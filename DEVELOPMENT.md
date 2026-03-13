@@ -4,6 +4,7 @@
 
 - [项目概述](#项目概述)
 - [项目结构](#项目结构)
+- [重构文档](#重构文档)
 - [核心文件说明](#核心文件说明)
 - [开发流程](#开发流程)
 - [发布流程](#发布流程)
@@ -50,6 +51,17 @@ iflow-for-obsidian/
 ├── tsconfig.json               # TypeScript 配置
 └── DEVELOPMENT.md              # 本文档
 ```
+
+---
+
+## 重构文档
+
+仓库已新增模块化重构文档，建议在执行大规模重构前先阅读以下文档：
+
+- `docs/refactor/README.md`：重构总览、实施顺序与验收原则
+- `docs/refactor/module-integration.md`：模块依赖方向、事件流与联通边界
+- `docs/refactor/tasks/`：任务级开发文档
+- `docs/refactor/modules/`：每个目标模块的独立开发文档
 
 ---
 
