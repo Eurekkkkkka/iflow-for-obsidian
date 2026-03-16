@@ -473,13 +473,7 @@ var IFlowService = class {
           readTextFile: true,
           writeTextFile: true
         },
-        terminal: {
-          create: true,
-          output: true,
-          waitForExit: true,
-          kill: true,
-          release: true
-        }
+        terminal: true
       }
     });
     if (!initResult.isAuthenticated) {
@@ -554,14 +548,18 @@ var IFlowService = class {
       console.log("[iFlow] terminal/create:", params);
       const terminalId = `terminal-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       const command = (params == null ? void 0 : params.command) || "";
+      const args = (params == null ? void 0 : params.args) || [];
       const cwd = (params == null ? void 0 : params.cwd) || this.getVaultPath();
-      const env = (params == null ? void 0 : params.env) || process.env;
+      const env = (params == null ? void 0 : params.env) || {};
+      const maxOutputBytes = (params == null ? void 0 : params.maxOutputBytes) || 1e6;
+      const fullCommand = args.length > 0 ? `${command} ${args.join(" ")}` : command;
+      console.log("[iFlow] Executing command:", fullCommand, "in cwd:", cwd);
       return new Promise((resolve) => {
         var _a, _b;
         try {
           const isWindows = process.platform === "win32";
           const shell = isWindows ? "powershell.exe" : "/bin/bash";
-          const shellArgs = isWindows ? ["-NoProfile", "-Command", command] : ["-c", command];
+          const shellArgs = isWindows ? ["-NoProfile", "-Command", fullCommand] : ["-c", fullCommand];
           const childProcess = spawn(shell, shellArgs, {
             cwd,
             env: { ...process.env, ...env },
@@ -576,10 +574,22 @@ var IFlowService = class {
             completed: false
           };
           (_a = childProcess.stdout) == null ? void 0 : _a.on("data", (data) => {
-            session.output += data.toString();
+            const chunk = data.toString();
+            if (session.output.length + chunk.length > maxOutputBytes) {
+              const excess = session.output.length + chunk.length - maxOutputBytes;
+              session.output = session.output.substring(excess) + chunk;
+            } else {
+              session.output += chunk;
+            }
           });
           (_b = childProcess.stderr) == null ? void 0 : _b.on("data", (data) => {
-            session.output += data.toString();
+            const chunk = data.toString();
+            if (session.output.length + chunk.length > maxOutputBytes) {
+              const excess = session.output.length + chunk.length - maxOutputBytes;
+              session.output = session.output.substring(excess) + chunk;
+            } else {
+              session.output += chunk;
+            }
           });
           childProcess.on("close", (code) => {
             session.exitCode = code;
@@ -602,6 +612,7 @@ var IFlowService = class {
       });
     });
     this.protocol.onServerMethod("terminal/output", async (_id, params) => {
+      var _a;
       console.log("[iFlow] terminal/output:", params);
       const terminalId = params == null ? void 0 : params.id;
       if (!terminalId) {
@@ -613,14 +624,13 @@ var IFlowService = class {
       }
       return {
         output: session.output,
-        exitCode: session.exitCode,
-        completed: session.completed
+        exitStatus: session.completed ? { code: (_a = session.exitCode) != null ? _a : 0, signal: null } : null,
+        truncated: false
       };
     });
     this.protocol.onServerMethod("terminal/wait_for_exit", async (_id, params) => {
       console.log("[iFlow] terminal/wait_for_exit:", params);
       const terminalId = params == null ? void 0 : params.id;
-      const timeout = (params == null ? void 0 : params.timeout) || 6e4;
       if (!terminalId) {
         return { error: "Terminal ID is required" };
       }
@@ -629,27 +639,19 @@ var IFlowService = class {
         return { error: `Terminal session not found: ${terminalId}` };
       }
       return new Promise((resolve) => {
+        var _a;
         if (session.completed) {
           resolve({
-            exitCode: session.exitCode,
-            output: session.output
+            exitStatus: { code: (_a = session.exitCode) != null ? _a : 0, signal: null }
           });
           return;
         }
-        const startTime = Date.now();
         const checkInterval = setInterval(() => {
+          var _a2;
           if (session.completed) {
             clearInterval(checkInterval);
             resolve({
-              exitCode: session.exitCode,
-              output: session.output
-            });
-          } else if (Date.now() - startTime > timeout) {
-            clearInterval(checkInterval);
-            resolve({
-              error: "Timeout waiting for command to complete",
-              output: session.output,
-              timedOut: true
+              exitStatus: { code: (_a2 = session.exitCode) != null ? _a2 : 0, signal: null }
             });
           }
         }, 100);

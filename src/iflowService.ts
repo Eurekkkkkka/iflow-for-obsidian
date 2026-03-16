@@ -116,13 +116,7 @@ export class IFlowService {
 					readTextFile: true,
 					writeTextFile: true,
 				},
-				terminal: {
-					create: true,
-					output: true,
-					waitForExit: true,
-					kill: true,
-					release: true,
-				},
+				terminal: true,
 			},
 		}) as { isAuthenticated?: boolean };
 
@@ -222,9 +216,17 @@ export class IFlowService {
 		this.protocol.onServerMethod('terminal/create', async (_id: number, params: any) => {
 			console.log('[iFlow] terminal/create:', params);
 			const terminalId = `terminal-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+			
+			// ACP spec: command is the executable name, args is array of arguments
 			const command = params?.command || '';
+			const args = params?.args || [];
 			const cwd = params?.cwd || this.getVaultPath();
-			const env = params?.env || process.env;
+			const env = params?.env || {};
+			const maxOutputBytes = params?.maxOutputBytes || 1000000;
+
+			// Combine command and args for execution
+			const fullCommand = args.length > 0 ? `${command} ${args.join(' ')}` : command;
+			console.log('[iFlow] Executing command:', fullCommand, 'in cwd:', cwd);
 
 			return new Promise((resolve) => {
 				try {
@@ -232,8 +234,8 @@ export class IFlowService {
 					const isWindows = process.platform === 'win32';
 					const shell = isWindows ? 'powershell.exe' : '/bin/bash';
 					const shellArgs = isWindows 
-						? ['-NoProfile', '-Command', command]
-						: ['-c', command];
+						? ['-NoProfile', '-Command', fullCommand]
+						: ['-c', fullCommand];
 
 					const childProcess = spawn(shell, shellArgs, {
 						cwd,
@@ -252,12 +254,25 @@ export class IFlowService {
 
 					// Capture stdout
 					childProcess.stdout?.on('data', (data: Buffer) => {
-						session.output += data.toString();
+						const chunk = data.toString();
+						// Apply maxOutputBytes limit
+						if (session.output.length + chunk.length > maxOutputBytes) {
+							const excess = session.output.length + chunk.length - maxOutputBytes;
+							session.output = session.output.substring(excess) + chunk;
+						} else {
+							session.output += chunk;
+						}
 					});
 
 					// Capture stderr
 					childProcess.stderr?.on('data', (data: Buffer) => {
-						session.output += data.toString();
+						const chunk = data.toString();
+						if (session.output.length + chunk.length > maxOutputBytes) {
+							const excess = session.output.length + chunk.length - maxOutputBytes;
+							session.output = session.output.substring(excess) + chunk;
+						} else {
+							session.output += chunk;
+						}
 					});
 
 					// Handle process completion
@@ -276,6 +291,7 @@ export class IFlowService {
 					this.terminalSessions.set(terminalId, session);
 					console.log(`[iFlow] Terminal created: ${terminalId}`);
 
+					// ACP spec returns { id: terminalId }
 					resolve({ id: terminalId });
 				} catch (error) {
 					console.error('[iFlow] terminal/create error:', error);
@@ -297,10 +313,11 @@ export class IFlowService {
 				return { error: `Terminal session not found: ${terminalId}` };
 			}
 
+			// ACP spec format: { output, exitStatus: { code, signal } | null, truncated }
 			return {
 				output: session.output,
-				exitCode: session.exitCode,
-				completed: session.completed,
+				exitStatus: session.completed ? { code: session.exitCode ?? 0, signal: null } : null,
+				truncated: false,
 			};
 		});
 
@@ -308,7 +325,6 @@ export class IFlowService {
 		this.protocol.onServerMethod('terminal/wait_for_exit', async (_id: number, params: any) => {
 			console.log('[iFlow] terminal/wait_for_exit:', params);
 			const terminalId = params?.id;
-			const timeout = params?.timeout || 60000; // Default 60 seconds
 
 			if (!terminalId) {
 				return { error: 'Terminal ID is required' };
@@ -321,27 +337,18 @@ export class IFlowService {
 
 			return new Promise((resolve) => {
 				if (session.completed) {
+					// ACP spec format: { exitStatus: { code, signal } }
 					resolve({
-						exitCode: session.exitCode,
-						output: session.output,
+						exitStatus: { code: session.exitCode ?? 0, signal: null },
 					});
 					return;
 				}
 
-				const startTime = Date.now();
 				const checkInterval = setInterval(() => {
 					if (session.completed) {
 						clearInterval(checkInterval);
 						resolve({
-							exitCode: session.exitCode,
-							output: session.output,
-						});
-					} else if (Date.now() - startTime > timeout) {
-						clearInterval(checkInterval);
-						resolve({
-							error: 'Timeout waiting for command to complete',
-							output: session.output,
-							timedOut: true,
+							exitStatus: { code: session.exitCode ?? 0, signal: null },
 						});
 					}
 				}, 100);
