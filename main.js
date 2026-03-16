@@ -218,18 +218,16 @@ var AcpClient = class {
 };
 
 // src/features/chat/toolCallMapper.ts
+function extractText(content) {
+  if (!content || typeof content !== "object") return null;
+  if (content.type === "text" && typeof content.text === "string") return content.text;
+  if (typeof content.text === "string") return content.text;
+  return null;
+}
 function extractTextFromUpdate(update) {
   var _a, _b, _c, _d;
-  if (update.sessionUpdate === "agent_message_chunk" || update.sessionUpdate === "agent_thought_chunk") {
-    const content = update.content;
-    if (content && typeof content === "object") {
-      if (content.type === "text" && typeof content.text === "string") {
-        return content.text;
-      }
-      if (typeof content.text === "string") {
-        return content.text;
-      }
-    }
+  if (update.sessionUpdate === "agent_message_chunk") {
+    return extractText(update.content);
   }
   if (typeof update === "string") return update;
   if (((_a = update.content) == null ? void 0 : _a.type) === "text") return update.content.text || "";
@@ -242,6 +240,13 @@ function extractTextFromUpdate(update) {
 function mapSessionUpdateToEvents(update) {
   const events = [];
   if (!update || typeof update !== "object") {
+    return events;
+  }
+  if (update.sessionUpdate === "agent_thought_chunk") {
+    const text = extractText(update.content);
+    if (text) {
+      events.push({ type: "thought", content: text });
+    }
     return events;
   }
   const content = update.content;
@@ -386,18 +391,18 @@ var VaultFileBridge = class {
     this.adapter = adapter;
     this.vaultPath = vaultPath;
   }
-  async readTextFile(path3) {
+  async readTextFile(path4) {
     try {
-      const relativePath = toVaultRelativePath(path3, this.vaultPath);
+      const relativePath = toVaultRelativePath(path4, this.vaultPath);
       const content = await this.adapter.read(relativePath);
       return { content };
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) };
     }
   }
-  async writeTextFile(path3, content) {
+  async writeTextFile(path4, content) {
     try {
-      const relativePath = toVaultRelativePath(path3, this.vaultPath);
+      const relativePath = toVaultRelativePath(path4, this.vaultPath);
       const normalized = isCanvasFile(relativePath) ? normalizeCanvasContent(content) : content;
       await this.adapter.write(relativePath, normalized);
       return null;
@@ -408,6 +413,8 @@ var VaultFileBridge = class {
 };
 
 // src/iflowService.ts
+var { spawn } = require("child_process");
+var path = require("path");
 var IFlowService = class {
   // Obsidian App instance
   constructor(port, timeout, app) {
@@ -416,6 +423,7 @@ var IFlowService = class {
     this.isConnected = false;
     this.protocol = null;
     this.sessionId = null;
+    this.terminalSessions = /* @__PURE__ */ new Map();
     this.handlerMap = /* @__PURE__ */ new Map();
     this.port = port;
     this.timeout = timeout;
@@ -464,6 +472,13 @@ var IFlowService = class {
         fs: {
           readTextFile: true,
           writeTextFile: true
+        },
+        terminal: {
+          create: true,
+          output: true,
+          waitForExit: true,
+          kill: true,
+          release: true
         }
       }
     });
@@ -535,6 +550,142 @@ var IFlowService = class {
       }
       return result;
     });
+    this.protocol.onServerMethod("terminal/create", async (_id, params) => {
+      console.log("[iFlow] terminal/create:", params);
+      const terminalId = `terminal-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const command = (params == null ? void 0 : params.command) || "";
+      const cwd = (params == null ? void 0 : params.cwd) || this.getVaultPath();
+      const env = (params == null ? void 0 : params.env) || process.env;
+      return new Promise((resolve) => {
+        var _a, _b;
+        try {
+          const isWindows = process.platform === "win32";
+          const shell = isWindows ? "powershell.exe" : "/bin/bash";
+          const shellArgs = isWindows ? ["-NoProfile", "-Command", command] : ["-c", command];
+          const childProcess = spawn(shell, shellArgs, {
+            cwd,
+            env: { ...process.env, ...env },
+            shell: false,
+            windowsHide: true
+          });
+          const session = {
+            id: terminalId,
+            process: childProcess,
+            output: "",
+            exitCode: null,
+            completed: false
+          };
+          (_a = childProcess.stdout) == null ? void 0 : _a.on("data", (data) => {
+            session.output += data.toString();
+          });
+          (_b = childProcess.stderr) == null ? void 0 : _b.on("data", (data) => {
+            session.output += data.toString();
+          });
+          childProcess.on("close", (code) => {
+            session.exitCode = code;
+            session.completed = true;
+            console.log(`[iFlow] Terminal ${terminalId} exited with code ${code}`);
+          });
+          childProcess.on("error", (err) => {
+            session.output += `Error: ${err.message}
+`;
+            session.exitCode = 1;
+            session.completed = true;
+          });
+          this.terminalSessions.set(terminalId, session);
+          console.log(`[iFlow] Terminal created: ${terminalId}`);
+          resolve({ id: terminalId });
+        } catch (error) {
+          console.error("[iFlow] terminal/create error:", error);
+          resolve({ error: String(error) });
+        }
+      });
+    });
+    this.protocol.onServerMethod("terminal/output", async (_id, params) => {
+      console.log("[iFlow] terminal/output:", params);
+      const terminalId = params == null ? void 0 : params.id;
+      if (!terminalId) {
+        return { error: "Terminal ID is required" };
+      }
+      const session = this.terminalSessions.get(terminalId);
+      if (!session) {
+        return { error: `Terminal session not found: ${terminalId}` };
+      }
+      return {
+        output: session.output,
+        exitCode: session.exitCode,
+        completed: session.completed
+      };
+    });
+    this.protocol.onServerMethod("terminal/wait_for_exit", async (_id, params) => {
+      console.log("[iFlow] terminal/wait_for_exit:", params);
+      const terminalId = params == null ? void 0 : params.id;
+      const timeout = (params == null ? void 0 : params.timeout) || 6e4;
+      if (!terminalId) {
+        return { error: "Terminal ID is required" };
+      }
+      const session = this.terminalSessions.get(terminalId);
+      if (!session) {
+        return { error: `Terminal session not found: ${terminalId}` };
+      }
+      return new Promise((resolve) => {
+        if (session.completed) {
+          resolve({
+            exitCode: session.exitCode,
+            output: session.output
+          });
+          return;
+        }
+        const startTime = Date.now();
+        const checkInterval = setInterval(() => {
+          if (session.completed) {
+            clearInterval(checkInterval);
+            resolve({
+              exitCode: session.exitCode,
+              output: session.output
+            });
+          } else if (Date.now() - startTime > timeout) {
+            clearInterval(checkInterval);
+            resolve({
+              error: "Timeout waiting for command to complete",
+              output: session.output,
+              timedOut: true
+            });
+          }
+        }, 100);
+      });
+    });
+    this.protocol.onServerMethod("terminal/kill", async (_id, params) => {
+      console.log("[iFlow] terminal/kill:", params);
+      const terminalId = params == null ? void 0 : params.id;
+      if (!terminalId) {
+        return { error: "Terminal ID is required" };
+      }
+      const session = this.terminalSessions.get(terminalId);
+      if (!session) {
+        return { error: `Terminal session not found: ${terminalId}` };
+      }
+      if (!session.completed && session.process) {
+        session.process.kill();
+        session.completed = true;
+        session.exitCode = -1;
+        return { killed: true };
+      }
+      return { killed: false, message: "Process already completed" };
+    });
+    this.protocol.onServerMethod("terminal/release", async (_id, params) => {
+      console.log("[iFlow] terminal/release:", params);
+      const terminalId = params == null ? void 0 : params.id;
+      if (!terminalId) {
+        return { error: "Terminal ID is required" };
+      }
+      const session = this.terminalSessions.get(terminalId);
+      if (session && !session.completed && session.process) {
+        session.process.kill();
+      }
+      this.terminalSessions.delete(terminalId);
+      return { released: true };
+    });
   }
   /**
    * Get the vault path from Obsidian app
@@ -584,43 +735,6 @@ var IFlowService = class {
     if (!this.isConnected || !this.protocol || !this.sessionId) {
       await this.connect();
     }
-    if (options.mode) {
-      try {
-        await this.protocol.sendRequest("session/set_mode", {
-          sessionId: this.sessionId,
-          modeId: options.mode
-        });
-        console.log(`[iFlow] Mode set to: ${options.mode}`);
-      } catch (error) {
-        console.warn(`[iFlow] Failed to set mode: ${error}`);
-      }
-    }
-    if (options.model) {
-      try {
-        await this.protocol.sendRequest("session/set_model", {
-          sessionId: this.sessionId,
-          modelId: options.model
-        });
-        console.log(`[iFlow] Model set to: ${options.model}`);
-      } catch (error) {
-        console.warn(`[iFlow] Failed to set model: ${error}`);
-      }
-    }
-    if (options.thinkingEnabled !== void 0) {
-      try {
-        const thinkPayload = {
-          sessionId: this.sessionId,
-          thinkEnabled: options.thinkingEnabled
-        };
-        if (options.thinkingEnabled) {
-          thinkPayload.thinkConfig = "think";
-        }
-        await this.protocol.sendRequest("session/set_think", thinkPayload);
-        console.log(`[iFlow] Thinking set to: ${options.thinkingEnabled}`);
-      } catch (error) {
-        console.warn(`[iFlow] Failed to set thinking: ${error}`);
-      }
-    }
     const prompt = (_a = options.promptOverride) != null ? _a : composePrompt({
       userMessage: options.content,
       filePath: options.filePath,
@@ -628,6 +742,7 @@ var IFlowService = class {
     });
     this.clearHandlers();
     if (options.onChunk) this.on("stream", options.onChunk);
+    if (options.onThought) this.on("thought", options.onThought);
     if (options.onTool) this.on("tool", options.onTool);
     if (options.onEnd) this.on("end", () => {
       var _a2;
@@ -727,42 +842,9 @@ var import_obsidian2 = require("obsidian");
 
 // src/i18n/zh-CN.ts
 var zhCN = {
-  // Model names (keep original as they are model IDs)
-  models: {
-    "glm-4.7": "GLM-4.7",
-    "glm-5": "GLM-5",
-    "deepseek-v3.2-chat": "DeepSeek-V3.2",
-    "iFlow-ROME-30BA3B": "iFlow-ROME-30BA3B(\u9884\u89C8\u7248)",
-    "qwen3-coder-plus": "Qwen3-Coder-Plus",
-    "kimi-k2-thinking": "Kimi-K2-Thinking",
-    "minimax-m2.5": "MiniMax-M2.5",
-    "minimax-m2.1": "MiniMax-M2.1",
-    "kimi-k2-0905": "Kimi-K2-0905",
-    "kimi-k2.5": "Kimi-K2.5"
-  },
-  // Mode names
-  modes: {
-    default: {
-      name: "\u666E\u901A",
-      icon: "\u26A1"
-    },
-    yolo: {
-      name: "\u6781\u901F",
-      icon: "\u{1F680}"
-    },
-    smart: {
-      name: "\u667A\u80FD",
-      icon: "\u{1F9E0}"
-    },
-    plan: {
-      name: "\u89C4\u5212",
-      icon: "\u{1F4CB}"
-    }
-  },
   // UI Labels
   ui: {
     send: "\u53D1\u9001",
-    thinking: "\u601D\u8003",
     newConversation: "\u65B0\u5BF9\u8BDD",
     today: "\u4ECA\u5929",
     yesterday: "\u6628\u5929",
@@ -770,6 +852,8 @@ var zhCN = {
     older: "\u66F4\u65E9",
     messages: "\u6761\u6D88\u606F",
     noMessages: "0 \u6761\u6D88\u606F",
+    clearSearch: "\u6E05\u7A7A\u641C\u7D22",
+    startNewConversation: "\u65B0\u5EFA\u5BF9\u8BDD",
     noConversations: "\u6682\u65E0\u5BF9\u8BDD",
     noConversationsFound: "\u672A\u627E\u5230\u5BF9\u8BDD",
     searchConversations: "\u641C\u7D22\u5BF9\u8BDD...",
@@ -805,10 +889,29 @@ var zhCN = {
     user: "\u4F60",
     assistant: "iFlow"
   },
+  // Runtime status
+  status: {
+    detecting: "\u68C0\u6D4B\u4E2D",
+    connected: "\u5DF2\u8FDE\u63A5",
+    starting: "\u542F\u52A8\u4E2D",
+    startFailed: "\u542F\u52A8\u5931\u8D25",
+    authFailed: "\u8BA4\u8BC1\u5931\u8D25",
+    sending: "\u53D1\u9001\u4E2D",
+    completed: "\u5DF2\u5B8C\u6210",
+    timedOut: "\u5DF2\u8D85\u65F6",
+    reconnecting: "\u91CD\u8FDE\u4E2D",
+    disconnected: "\u672A\u8FDE\u63A5"
+  },
   // Errors
   errors: {
     streamingTimeout: "\u6D41\u5F0F\u4F20\u8F93\u8D85\u65F6",
-    connectionFailed: "\u8FDE\u63A5\u5931\u8D25"
+    connectionFailed: "\u8FDE\u63A5\u5931\u8D25",
+    sendFailed: "\u53D1\u9001\u5931\u8D25\uFF0C\u8BF7\u91CD\u8BD5",
+    sdkNotInstalled: "\u672A\u68C0\u6D4B\u5230 iFlow CLI\uFF0C\u8BF7\u8FD0\u884C: npm install -g @iflow-ai/iflow-cli@latest",
+    sdkAuthFailed: "iFlow CLI \u8BA4\u8BC1\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u8D26\u53F7\u72B6\u6001",
+    sdkPortBusy: "\u7AEF\u53E3 {port} \u88AB\u5360\u7528\uFF0C\u8BF7\u5728\u8BBE\u7F6E\u4E2D\u4FEE\u6539\u7AEF\u53E3\u540E\u91CD\u8BD5",
+    sdkStartTimeout: "iFlow CLI \u542F\u52A8\u8D85\u65F6\uFF0C\u8BF7\u624B\u52A8\u8FD0\u884C iflow \u540E\u91CD\u8BD5",
+    genericHint: "\u5982\u4ECD\u65E0\u6CD5\u89E3\u51B3\uFF0C\u8BF7\u91CD\u542F Obsidian \u6216\u68C0\u67E5\u65E5\u5FD7"
   },
   // Settings page
   settings: {
@@ -848,48 +951,19 @@ var zhCN = {
   // Context indicator
   context: {
     file: "\u{1F4C4} ",
-    attached: "\u5DF2\u9644\u52A0: "
+    attached: "\u5DF2\u9644\u52A0: ",
+    autoLabel: "\u81EA\u52A8",
+    manualLabel: "\u624B\u52A8",
+    removeContext: "\u79FB\u9664",
+    selectionLabel: "\u9009\u4E2D\u6587\u672C"
   }
 };
 
 // src/i18n/en-US.ts
 var enUS = {
-  // Model names
-  models: {
-    "glm-4.7": "GLM-4.7",
-    "glm-5": "GLM-5",
-    "deepseek-v3.2-chat": "DeepSeek-V3.2",
-    "iFlow-ROME-30BA3B": "iFlow-ROME-30BA3B(Preview)",
-    "qwen3-coder-plus": "Qwen3-Coder-Plus",
-    "kimi-k2-thinking": "Kimi-K2-Thinking",
-    "minimax-m2.5": "MiniMax-M2.5",
-    "minimax-m2.1": "MiniMax-M2.1",
-    "kimi-k2-0905": "Kimi-K2-0905",
-    "kimi-k2.5": "Kimi-K2.5"
-  },
-  // Mode names
-  modes: {
-    default: {
-      name: "Normal",
-      icon: "\u26A1"
-    },
-    yolo: {
-      name: "YOLO",
-      icon: "\u{1F680}"
-    },
-    smart: {
-      name: "Smart",
-      icon: "\u{1F9E0}"
-    },
-    plan: {
-      name: "Plan",
-      icon: "\u{1F4CB}"
-    }
-  },
   // UI Labels
   ui: {
     send: "Send",
-    thinking: "Thinking",
     newConversation: "New Conversation",
     today: "Today",
     yesterday: "Yesterday",
@@ -897,6 +971,8 @@ var enUS = {
     older: "Older",
     messages: "messages",
     noMessages: "0 messages",
+    clearSearch: "Clear search",
+    startNewConversation: "Start new conversation",
     noConversations: "No conversations yet",
     noConversationsFound: "No conversations found",
     searchConversations: "Search conversations...",
@@ -932,10 +1008,29 @@ var enUS = {
     user: "You",
     assistant: "iFlow"
   },
+  // Runtime status
+  status: {
+    detecting: "Detecting",
+    connected: "Connected",
+    starting: "Starting",
+    startFailed: "Start failed",
+    authFailed: "Auth failed",
+    sending: "Sending",
+    completed: "Completed",
+    timedOut: "Timed out",
+    reconnecting: "Reconnecting",
+    disconnected: "Disconnected"
+  },
   // Errors
   errors: {
     streamingTimeout: "Streaming timeout",
-    connectionFailed: "Connection failed"
+    connectionFailed: "Connection failed",
+    sendFailed: "Send failed, please try again",
+    sdkNotInstalled: "iFlow CLI not found. Run: npm install -g @iflow-ai/iflow-cli@latest",
+    sdkAuthFailed: "iFlow CLI authentication failed. Please check your account.",
+    sdkPortBusy: "Port {port} is in use. Change the port in Settings and retry.",
+    sdkStartTimeout: "iFlow CLI start timed out. Run `iflow` manually then retry.",
+    genericHint: "If the issue persists, restart Obsidian or check the console logs."
   },
   // Settings page
   settings: {
@@ -975,7 +1070,11 @@ var enUS = {
   // Context indicator
   context: {
     file: "\u{1F4C4} ",
-    attached: "Attached: "
+    attached: "Attached: ",
+    autoLabel: "auto",
+    manualLabel: "manual",
+    removeContext: "Remove",
+    selectionLabel: "Selection"
   }
 };
 
@@ -1027,18 +1126,76 @@ function format(template, vars) {
 function escapeHtml(text) {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
+function splitTableRow(row) {
+  return row.split("|").slice(1, -1).map((cell) => cell.trim());
+}
+function renderMarkdownTables(content) {
+  return content.replace(
+    /^(\|.+\|)[ \t]*\n(\|[-: |]+\|)[ \t]*\n((?:\|.+\|[ \t]*\n?)+)/gm,
+    (_match, header, _sep, body) => {
+      const headerCells = splitTableRow(header).map((c) => escapeHtml(c));
+      const bodyLines = body.trim().split("\n").filter((r) => r.trim().startsWith("|"));
+      const thead = `<thead><tr>${headerCells.map((c) => `<th class="iflow-th">${c}</th>`).join("")}</tr></thead>`;
+      const tbody = `<tbody>${bodyLines.map((row) => {
+        const cells = splitTableRow(row).map((c) => escapeHtml(c));
+        return `<tr>${cells.map((c) => `<td class="iflow-td">${c}</td>`).join("")}</tr>`;
+      }).join("")}</tbody>`;
+      return `<table class="iflow-table">${thead}${tbody}</table>`;
+    }
+  );
+}
+function wrapListItems(content) {
+  const lines = content.split("\n");
+  const out = [];
+  let listType = null;
+  for (const line of lines) {
+    const isOl = /^<li class="iflow-li iflow-li-num"/.test(line);
+    const isUl = !isOl && /^<li class="iflow-li"/.test(line);
+    if (isUl) {
+      if (listType === "ol") {
+        out.push("</ol>");
+      }
+      if (listType !== "ul") {
+        out.push('<ul class="iflow-ul">');
+        listType = "ul";
+      }
+    } else if (isOl) {
+      if (listType === "ul") {
+        out.push("</ul>");
+      }
+      if (listType !== "ol") {
+        out.push('<ol class="iflow-ol">');
+        listType = "ol";
+      }
+    } else if (listType !== null) {
+      out.push(listType === "ul" ? "</ul>" : "</ol>");
+      listType = null;
+    }
+    out.push(line);
+  }
+  if (listType === "ul") out.push("</ul>");
+  else if (listType === "ol") out.push("</ol>");
+  return out.join("\n");
+}
 function renderMessage(content) {
+  const codeBlocks = [];
   let result = content.replace(/```(\w*)\n([\s\S]*?)```/g, (_match, lang, code) => {
     const langClass = lang ? `language-${lang}` : "";
-    return `<pre class="iflow-code-block ${langClass}"><code>${escapeHtml(code.trim())}</code></pre>`;
+    const langAttr = lang ? ` data-lang="${escapeHtml(lang)}"` : "";
+    const html = `<pre class="iflow-code-block ${langClass}"${langAttr}><code>${escapeHtml(code.trim())}</code></pre>`;
+    const placeholder = `\0CODE${codeBlocks.length}\0`;
+    codeBlocks.push(html);
+    return placeholder;
   });
-  result = result.replace(/`([^`]+)`/g, '<code class="iflow-inline-code">$1</code>');
-  result = result.replace(/\*\*([^*]+)\*\*/g, '<strong class="iflow-bold">$1</strong>');
-  result = result.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  result = renderMarkdownTables(result);
+  result = result.replace(/^>\s+(.+)$/gm, '<div class="iflow-thinking">$1</div>');
   result = result.replace(/^\*\s*(Thinking.+)$/gm, '<div class="iflow-thinking">$1</div>');
   result = result.replace(/^### (.+)$/gm, '<h4 class="iflow-h4">$1</h4>');
   result = result.replace(/^## (.+)$/gm, '<h3 class="iflow-h3">$1</h3>');
   result = result.replace(/^# (.+)$/gm, '<h2 class="iflow-h2">$1</h2>');
+  result = result.replace(/`([^`]+)`/g, '<code class="iflow-inline-code">$1</code>');
+  result = result.replace(/\*\*([^*]+)\*\*/g, '<strong class="iflow-bold">$1</strong>');
+  result = result.replace(/\*([^*]+)\*/g, "<em>$1</em>");
   result = result.replace(/^(\s*)[-*]\s+(.+)$/gm, (_match, spaces, text) => {
     const indent = spaces.length;
     return `<li class="iflow-li" style="margin-left: ${indent * 8}px">${text}</li>`;
@@ -1047,6 +1204,7 @@ function renderMessage(content) {
     const indent = spaces.length;
     return `<li class="iflow-li iflow-li-num" style="margin-left: ${indent * 8}px">${text}</li>`;
   });
+  result = wrapListItems(result);
   result = result.replace(/✅/g, '<span class="iflow-icon iflow-icon-success">\u2705</span>');
   result = result.replace(/❌/g, '<span class="iflow-icon iflow-icon-error">\u274C</span>');
   result = result.replace(/🔄/g, '<span class="iflow-icon iflow-icon-loading">\u{1F504}</span>');
@@ -1057,8 +1215,11 @@ function renderMessage(content) {
   );
   result = result.replace(/`([A-Za-z]+\+[A-Za-z+]+)`/g, '<kbd class="iflow-kbd">$1</kbd>');
   result = result.replace(/\n/g, "<br>");
-  result = result.replace(/<\/(h[234]|pre|div|li)><br>/g, "</$1>");
-  result = result.replace(/<br><(h[234]|pre|div|li)/g, "<$1");
+  result = result.replace(/<\/(h[234]|div|li|ul|ol|table)><br>/g, "</$1>");
+  result = result.replace(/<br><(h[234]|div|li|ul|ol|table)/g, "<$1");
+  result = result.replace(/\x00CODE(\d+)\x00/g, (_m, i) => codeBlocks[parseInt(i, 10)]);
+  result = result.replace(/<br><pre/g, "<pre");
+  result = result.replace(/<\/pre><br>/g, "</pre>");
   return result;
 }
 
@@ -1127,6 +1288,31 @@ var MessageListView = class {
       this.appendMessage(msg.role, msg.content, msg.id);
     }
   }
+  showThought(messageId, content) {
+    const messageEl = this.container.querySelector(`[data-id="${messageId}"]`);
+    if (!messageEl) return;
+    let thoughtBlock = messageEl.querySelector(".iflow-thought-block");
+    if (!thoughtBlock) {
+      thoughtBlock = messageEl.createDiv({ cls: "iflow-thought-block" });
+      const toggle = thoughtBlock.createDiv({ cls: "iflow-thought-toggle" });
+      toggle.innerHTML = "\u25B6 \u601D\u8003\u8FC7\u7A0B";
+      thoughtBlock.createDiv({ cls: "iflow-thought-content" });
+    }
+    const contentEl = messageEl.querySelector(".iflow-thought-content");
+    if (contentEl) contentEl.innerHTML = content;
+  }
+  updateThought(messageId, content) {
+    const messageEl = this.container.querySelector(`[data-id="${messageId}"]`);
+    if (!messageEl) return;
+    const contentEl = messageEl.querySelector(".iflow-thought-content");
+    if (contentEl) contentEl.innerHTML = content;
+  }
+  finalizeThought(messageId) {
+    const messageEl = this.container.querySelector(`[data-id="${messageId}"]`);
+    if (!messageEl) return;
+    const thoughtBlock = messageEl.querySelector(".iflow-thought-block");
+    if (thoughtBlock) thoughtBlock.classList.add("iflow-thought-collapsed");
+  }
 };
 
 // src/ui/chat/toolCallView.ts
@@ -1184,6 +1370,9 @@ var ToolCallView = class {
         }
       }
     }
+    if (tool.status === "completed") {
+      toolContainer.classList.add("iflow-tool-completed");
+    }
   }
 };
 
@@ -1234,6 +1423,19 @@ function formatImageSize(bytes) {
 
 // src/domain/conversation/storageQuotaPolicy.ts
 var MAX_STORAGE_BYTES = 4 * 1024 * 1024;
+var WARNING_THRESHOLD = 0.8;
+var CRITICAL_THRESHOLD = 0.95;
+function calculateStorageQuotaInfo(data) {
+  const usedBytes = data ? data.length : 0;
+  const percentUsed = usedBytes / MAX_STORAGE_BYTES;
+  return {
+    usedBytes,
+    totalBytes: MAX_STORAGE_BYTES,
+    percentUsed,
+    approachingLimit: percentUsed >= WARNING_THRESHOLD,
+    atLimit: percentUsed >= CRITICAL_THRESHOLD
+  };
+}
 function cleanupOldConversations(conversations, currentConversationId, keepCount = 50) {
   var _a;
   const sorted = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -1252,6 +1454,15 @@ function cleanupOldConversations(conversations, currentConversationId, keepCount
     removedCount
   };
 }
+function buildQuotaWarningMessage(info) {
+  if (info.atLimit) {
+    return `\u5B58\u50A8\u7A7A\u95F4\u5DF2\u8FBE\u4E0A\u9650\uFF08${(info.percentUsed * 100).toFixed(0)}%\uFF09\uFF0C\u8BF7\u6E05\u7406\u65E7\u4F1A\u8BDD\u4EE5\u7EE7\u7EED\u4F7F\u7528\u3002`;
+  }
+  if (info.approachingLimit) {
+    return `\u5B58\u50A8\u7A7A\u95F4\u63A5\u8FD1\u4E0A\u9650\uFF08${(info.percentUsed * 100).toFixed(0)}%\uFF09\uFF0C\u5EFA\u8BAE\u6E05\u7406\u65E7\u4F1A\u8BDD\u3002`;
+  }
+  return null;
+}
 
 // src/domain/conversation/conversationService.ts
 var ConversationService = class {
@@ -1268,17 +1479,15 @@ var ConversationService = class {
     }
     return state.conversations.find((c) => c.id === state.currentConversationId) || null;
   }
-  newConversation(defaultModel = "glm-4.7", defaultMode = "default", defaultThink = false) {
-    var _a, _b, _c;
+  newConversation() {
     const state = this.repository.getState();
-    const current = this.getCurrentConversation();
     const conversation = {
       id: `conv-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
       title: "New Conversation",
       messages: [],
-      mode: (_a = current == null ? void 0 : current.mode) != null ? _a : defaultMode,
-      think: (_b = current == null ? void 0 : current.think) != null ? _b : defaultThink,
-      model: (_c = current == null ? void 0 : current.model) != null ? _c : defaultModel,
+      mode: "default",
+      think: false,
+      model: "glm-4.7",
       createdAt: Date.now(),
       updatedAt: Date.now()
     };
@@ -1368,6 +1577,13 @@ var ConversationService = class {
   subscribe(listener) {
     return this.repository.subscribe(listener);
   }
+  getStorageQuota() {
+    const repo = this.repository;
+    if (typeof repo.getStorageQuota === "function") {
+      return repo.getStorageQuota();
+    }
+    return null;
+  }
   generateTitle(firstMessage) {
     const trimmed = firstMessage.trim();
     return trimmed.length > 50 ? `${trimmed.substring(0, 47)}...` : trimmed;
@@ -1429,16 +1645,72 @@ var LocalStorageConversationRepository = class {
       console.error("[ConversationRepository] Failed to save:", error);
     }
   }
-  hashVaultPath(path3) {
+  getStorageQuota() {
+    try {
+      const data = this.storage.getItem(this.storageKey);
+      return calculateStorageQuotaInfo(data);
+    } catch (e) {
+      return calculateStorageQuotaInfo(null);
+    }
+  }
+  hashVaultPath(path4) {
     let hash = 0;
-    for (let i = 0; i < path3.length; i++) {
-      const char = path3.charCodeAt(i);
+    for (let i = 0; i < path4.length; i++) {
+      const char = path4.charCodeAt(i);
       hash = (hash << 5) - hash + char;
       hash = hash & hash;
     }
     return Math.abs(hash).toString(36);
   }
 };
+
+// src/ui/chat/inputState.ts
+function resolveInputState({ isStreaming, isEmpty }) {
+  if (isStreaming) {
+    return {
+      sendDisabled: true,
+      buttonLabel: "\xB7\xB7\xB7",
+      placeholder: "\u6B63\u5728\u751F\u6210\u56DE\u7B54\uFF0C\u8BF7\u7A0D\u5019\u2026"
+    };
+  }
+  return {
+    sendDisabled: isEmpty,
+    buttonLabel: "\u2191",
+    placeholder: "\u8F93\u5165\u6D88\u606F\u2026 (Enter \u53D1\u9001\uFF0CShift+Enter \u6362\u884C)"
+  };
+}
+
+// src/ui/chat/scrollPositionStore.ts
+var ScrollPositionStore = class {
+  constructor() {
+    this.positions = /* @__PURE__ */ new Map();
+  }
+  /** Returns the saved scroll position, or 0 if none exists. */
+  get(conversationId) {
+    var _a;
+    return (_a = this.positions.get(conversationId)) != null ? _a : 0;
+  }
+  /** Saves the current scroll position for a conversation. */
+  save(conversationId, scrollTop) {
+    this.positions.set(conversationId, scrollTop);
+  }
+  /** Clears the saved position for a conversation (resets to 0). */
+  clear(conversationId) {
+    this.positions.delete(conversationId);
+  }
+};
+
+// src/ui/chat/ariaButtonLabels.ts
+var ARIA_LABELS = {
+  newConversation: "\u65B0\u5EFA\u4F1A\u8BDD",
+  imageRemove: "\u79FB\u9664\u56FE\u7247",
+  contextRemove: "\u79FB\u9664\u4E0A\u4E0B\u6587\u6587\u4EF6",
+  modalClose: "\u5173\u95ED\u9884\u89C8",
+  deleteConversation: "\u5220\u9664\u4F1A\u8BDD"
+};
+function getButtonAriaLabel(id) {
+  return ARIA_LABELS[id];
+}
 
 // src/chatView.ts
 var VIEW_TYPE_IFLOW_CHAT = "iflow-chat-view";
@@ -1447,10 +1719,8 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     super(leaf);
     this.messages = [];
     this.currentMessage = "";
+    this.currentThought = "";
     this.isStreaming = false;
-    // Available models and modes from iFlow CLI
-    this.availableModels = [];
-    this.availableModes = [];
     // Conversation management
     this.currentConversationId = null;
     this.conversationTitleEl = null;
@@ -1466,12 +1736,15 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     this.attachedImages = /* @__PURE__ */ new Map();
     this.imagePreviewEl = null;
     this.dropOverlay = null;
+    this.connectionStatusEl = null;
+    this.connectionCheckTimer = null;
+    this.sendButton = null;
+    this.scrollPositionStore = new ScrollPositionStore();
     this.streamingTimeout = null;
+    // Task 7.5: Quota warning — throttled to once per view lifetime
+    this.quotaWarningShown = false;
     this.plugin = plugin;
     this.iflowService = iflowService;
-    this.currentModel = plugin.settings.lastUsedModel || "glm-4.7";
-    this.currentMode = plugin.settings.lastUsedMode || "default";
-    this.thinkingEnabled = plugin.settings.lastUsedThinking || false;
     initI18n();
     const vaultPath = this.plugin.getVaultPath();
     const repository = new LocalStorageConversationRepository(vaultPath);
@@ -1494,11 +1767,8 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     const chatContainer = container.createDiv({ cls: "iflow-chat" });
     const topBar = chatContainer.createDiv({ cls: "iflow-top-bar" });
     this.createConversationSelector(topBar);
-    const controlBar = chatContainer.createDiv({ cls: "iflow-control-bar" });
-    const modelSelector = this.createModelSelector(controlBar);
-    const rightControls = controlBar.createDiv({ cls: "iflow-control-right" });
-    const modeSelector = this.createModeSelector(rightControls);
-    const thinkingToggle = this.createThinkingToggle(rightControls);
+    this.connectionStatusEl = chatContainer.createDiv({ cls: "iflow-connection-status iflow-status-detecting" });
+    this.renderConnectionStatus("detecting");
     const contextArea = chatContainer.createDiv({ cls: "iflow-context-area" });
     this.imagePreviewEl = contextArea.createDiv({ cls: "iflow-image-preview" });
     this.imagePreviewEl.style.display = "none";
@@ -1524,8 +1794,10 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     this.textarea = textarea;
     const sendButton = inputWrapper.createEl("button", {
       cls: "iflow-send-button",
-      text: t().ui.send
+      text: "\u2191",
+      attr: { "aria-label": t().ui.send }
     });
+    this.sendButton = sendButton;
     sendButton.onclick = () => this.sendMessage();
     textarea.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -1533,12 +1805,14 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
         this.sendMessage();
       }
     });
+    textarea.addEventListener("input", () => this.updateInputState());
     this.setupImageDropAndPaste(inputWrapper);
     this.updateContext();
     this.registerEvent(
       this.app.workspace.on("active-leaf-change", () => this.updateContext())
     );
     this.initializeConversation();
+    this.startConnectionStatusPolling();
   }
   initializeConversation() {
     const state = this.conversationService.getState();
@@ -1550,6 +1824,10 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     }
   }
   async onClose() {
+    if (this.connectionCheckTimer !== null) {
+      clearInterval(this.connectionCheckTimer);
+      this.connectionCheckTimer = null;
+    }
   }
   updateContext() {
     const activeFile = this.plugin.getActiveFile();
@@ -1566,7 +1844,11 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     if (fileToShow) {
       const fileSpan = this.contextIndicator.createSpan({ cls: "iflow-context-file" });
       fileSpan.textContent = `${t().context.attached}${fileToShow.path}`;
-      const removeBtn = this.contextIndicator.createSpan({ cls: "iflow-context-remove", text: "\xD7" });
+      const removeBtn = this.contextIndicator.createSpan({
+        cls: "iflow-context-remove",
+        text: "\xD7",
+        attr: { "role": "button", "aria-label": getButtonAriaLabel("contextRemove"), "tabindex": "0" }
+      });
       removeBtn.onclick = () => {
         this.attachedFile = null;
         this.currentFile = null;
@@ -1711,6 +1993,14 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     for (const [id, image] of this.attachedImages) {
       this.renderImagePreview(id, image);
     }
+    if (this.attachedImages.size > 1) {
+      const clearAllBtn = this.imagePreviewEl.createDiv({ cls: "iflow-image-clear-all" });
+      clearAllBtn.textContent = `\u6E05\u7A7A\u5168\u90E8 (${this.attachedImages.size})`;
+      clearAllBtn.onclick = () => {
+        this.attachedImages.clear();
+        this.updateImagePreview();
+      };
+    }
   }
   renderImagePreview(id, image) {
     const chip = this.imagePreviewEl.createDiv({ cls: "iflow-image-chip" });
@@ -1724,7 +2014,11 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     const info = chip.createDiv({ cls: "iflow-image-info" });
     info.createSpan({ cls: "iflow-image-name", text: this.truncateName(image.name, 15) });
     info.createSpan({ cls: "iflow-image-size", text: this.formatSize(image.size) });
-    const remove = chip.createSpan({ cls: "iflow-image-remove", text: "\xD7" });
+    const remove = chip.createSpan({
+      cls: "iflow-image-remove",
+      text: "\xD7",
+      attr: { "role": "button", "aria-label": getButtonAriaLabel("imageRemove"), "tabindex": "0" }
+    });
     remove.onclick = () => {
       this.attachedImages.delete(id);
       this.updateImagePreview();
@@ -1740,7 +2034,11 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
         alt: image.name
       }
     });
-    const closeBtn = modal.createDiv({ cls: "iflow-image-modal-close", text: "\xD7" });
+    const closeBtn = modal.createDiv({
+      cls: "iflow-image-modal-close",
+      text: "\xD7",
+      attr: { "role": "button", "aria-label": getButtonAriaLabel("modalClose"), "tabindex": "0" }
+    });
     const handleEsc = (e) => {
       if (e.key === "Escape") close();
     };
@@ -1811,6 +2109,7 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     const assistantMsgId = this.addMessage("assistant", "");
     this.currentMessage = "";
     this.isStreaming = true;
+    this.updateInputState();
     this.showLoadingAnimation(assistantMsgId);
     console.log("[iFlow Chat] Starting streaming", {
       userMsgId,
@@ -1831,17 +2130,25 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
         this.streamingTimeout = null;
       }
       this.isStreaming = false;
+      this.currentThought = "";
+      this.updateInputState();
+      this.checkAndWarnQuota();
       console.log("[iFlow Chat] Cleanup: streaming state reset");
     };
+    this.renderConnectionStatus("detecting");
     try {
       await this.iflowService.sendMessage({
         content,
         filePath: activeFile == null ? void 0 : activeFile.path,
         fileContent,
         selection,
-        model: this.currentModel,
-        mode: this.currentMode,
-        thinkingEnabled: this.thinkingEnabled,
+        onThought: (chunk) => {
+          this.currentThought += chunk;
+          this.messageListView.showThought(assistantMsgId, this.currentThought);
+          if (this.plugin.settings.enableAutoScroll) {
+            this.scrollToBottom();
+          }
+        },
         onChunk: (chunk) => {
           if (!this.currentMessage) {
             this.hideLoadingAnimation(assistantMsgId);
@@ -1861,7 +2168,9 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
         },
         onEnd: () => {
           console.log("[iFlow Chat] onEnd called, setting isStreaming = false");
+          this.messageListView.finalizeThought(assistantMsgId);
           cleanup();
+          this.renderConnectionStatus("connected");
           if (this.currentConversationId && this.currentMessage) {
             this.conversationService.appendAssistantMessage(
               this.currentConversationId,
@@ -1873,13 +2182,15 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
         onError: (error) => {
           console.log("[iFlow Chat] onError called", error);
           cleanup();
-          this.updateMessage(assistantMsgId, `Error: ${error}`);
+          this.renderConnectionStatus("disconnected");
+          this.updateMessage(assistantMsgId, t().errors.sendFailed);
         }
       });
     } catch (error) {
       console.log("[iFlow Chat] Exception in sendMessage", error);
       cleanup();
-      this.updateMessage(assistantMsgId, `Error: ${error.message}`);
+      this.renderConnectionStatus("disconnected");
+      this.updateMessage(assistantMsgId, t().errors.sendFailed);
     }
   }
   addMessage(role, content) {
@@ -1904,6 +2215,63 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
   }
   scrollToBottom() {
     this.messageListView.scrollToBottom();
+  }
+  updateInputState() {
+    if (!this.sendButton) return;
+    const isEmpty = this.textarea.value.trim().length === 0;
+    const state = resolveInputState({ isStreaming: this.isStreaming, isEmpty });
+    this.sendButton.disabled = state.sendDisabled;
+    this.sendButton.textContent = state.buttonLabel;
+    if (state.sendDisabled) {
+      this.sendButton.addClass("iflow-send-disabled");
+    } else {
+      this.sendButton.removeClass("iflow-send-disabled");
+    }
+  }
+  checkAndWarnQuota() {
+    if (this.quotaWarningShown) return;
+    const quota = this.conversationService.getStorageQuota();
+    if (!quota) return;
+    const msg = buildQuotaWarningMessage(quota);
+    if (msg) {
+      new import_obsidian2.Notice(msg, 6e3);
+      this.quotaWarningShown = true;
+    }
+  }
+  // ============================================
+  // Connection Status (Task 2.3)
+  // ============================================
+  renderConnectionStatus(state) {
+    if (!this.connectionStatusEl) return;
+    const el = this.connectionStatusEl;
+    el.empty();
+    el.className = `iflow-connection-status iflow-status-${state}`;
+    const dots = {
+      detecting: "\u25CB",
+      connected: "\u25CF",
+      disconnected: "\u25CB",
+      reconnecting: "\u25CC"
+    };
+    const labels = {
+      detecting: t().status.detecting,
+      connected: t().status.connected,
+      disconnected: t().status.disconnected,
+      reconnecting: t().status.reconnecting
+    };
+    el.createSpan({ cls: "iflow-status-dot", text: dots[state] });
+    el.createSpan({ cls: "iflow-status-label", text: labels[state] });
+  }
+  startConnectionStatusPolling() {
+    const check = async () => {
+      try {
+        const ok = await this.iflowService.checkConnection();
+        this.renderConnectionStatus(ok ? "connected" : "disconnected");
+      } catch (e) {
+        this.renderConnectionStatus("disconnected");
+      }
+    };
+    check();
+    this.connectionCheckTimer = setInterval(check, 1e4);
   }
   // ============================================
   // UI Component Creators
@@ -1985,143 +2353,6 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
       subtitle: "\u6CE8\u610F\u4F11\u606F\uFF0C\u71AC\u591C\u4F24\u8EAB\u4F53\u54E6"
     };
   }
-  createModelSelector(container) {
-    const selector = container.createDiv({ cls: "iflow-model-selector" });
-    const defaultModels = [
-      { id: "glm-4.7", name: t().models["glm-4.7"] },
-      { id: "glm-5", name: t().models["glm-5"] },
-      { id: "deepseek-v3.2-chat", name: t().models["deepseek-v3.2-chat"] },
-      { id: "iFlow-ROME-30BA3B", name: t().models["iFlow-ROME-30BA3B"] },
-      { id: "qwen3-coder-plus", name: t().models["qwen3-coder-plus"] },
-      { id: "kimi-k2-thinking", name: t().models["kimi-k2-thinking"] },
-      { id: "minimax-m2.5", name: t().models["minimax-m2.5"] },
-      { id: "minimax-m2.1", name: t().models["minimax-m2.1"] },
-      { id: "kimi-k2-0905", name: t().models["kimi-k2-0905"] },
-      { id: "kimi-k2.5", name: t().models["kimi-k2.5"] }
-    ];
-    this.availableModels = defaultModels;
-    const btn = selector.createEl("button", {
-      cls: "iflow-model-btn ready"
-    });
-    const currentModelObj = defaultModels.find((m) => m.id === this.currentModel) || defaultModels[0];
-    const label = btn.createSpan({ cls: "iflow-model-label", text: currentModelObj.name });
-    const chevron = btn.createDiv({ cls: "iflow-model-chevron" });
-    chevron.innerHTML = `
-			<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-				<polyline points="6 9 12 15 18 9"></polyline>
-			</svg>
-		`;
-    const dropdown = selector.createDiv({ cls: "iflow-model-dropdown" });
-    this.availableModels.forEach((model) => {
-      dropdown.createDiv({
-        cls: `iflow-model-option ${model.id === this.currentModel ? "selected" : ""}`,
-        text: model.name
-      }, (el) => {
-        el.onclick = async (e) => {
-          e.stopPropagation();
-          this.currentModel = model.id;
-          label.textContent = model.name;
-          dropdown.querySelectorAll(".iflow-model-option").forEach((opt) => {
-            opt.removeClass("selected");
-          });
-          el.addClass("selected");
-          this.plugin.settings.lastUsedModel = model.id;
-          await this.plugin.saveSettings();
-          selector.removeClass("open");
-        };
-      });
-    });
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      document.querySelectorAll(".iflow-model-selector.open, .iflow-mode-selector.open").forEach((el) => {
-        el.removeClass("open");
-      });
-      selector.toggleClass("open", !selector.hasClass("open"));
-    };
-    const closeHandler = (e) => {
-      if (!selector.contains(e.target)) {
-        selector.removeClass("open");
-      }
-    };
-    document.addEventListener("click", closeHandler);
-    return selector;
-  }
-  createModeSelector(container) {
-    const selector = container.createDiv({ cls: "iflow-mode-selector" });
-    const modes = [
-      { id: "default", name: t().modes.default.name, icon: t().modes.default.icon },
-      { id: "yolo", name: t().modes.yolo.name, icon: t().modes.yolo.icon },
-      { id: "smart", name: t().modes.smart.name, icon: t().modes.smart.icon },
-      { id: "plan", name: t().modes.plan.name, icon: t().modes.plan.icon }
-    ];
-    this.availableModes = modes;
-    const btn = selector.createEl("button", {
-      cls: "iflow-mode-btn"
-    });
-    const currentMode = modes.find((m) => m.id === this.currentMode);
-    const icon = btn.createSpan({ cls: "iflow-mode-icon", text: (currentMode == null ? void 0 : currentMode.icon) || t().modes.default.icon });
-    const label = btn.createSpan({ cls: "iflow-mode-label", text: (currentMode == null ? void 0 : currentMode.name) || t().modes.default.name });
-    const chevron = btn.createDiv({ cls: "iflow-mode-chevron" });
-    chevron.innerHTML = `
-			<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-				<polyline points="6 9 12 15 18 9"></polyline>
-			</svg>
-		`;
-    const dropdown = selector.createDiv({ cls: "iflow-mode-dropdown" });
-    modes.forEach((mode) => {
-      dropdown.createDiv({
-        cls: `iflow-mode-option ${mode.id === this.currentMode ? "selected" : ""}`,
-        attr: { "data-mode": mode.id }
-      }, (el) => {
-        const optIcon = el.createSpan({ cls: "iflow-mode-icon", text: mode.icon });
-        const optLabel = el.createSpan({ text: mode.name });
-        el.onclick = async (e) => {
-          e.stopPropagation();
-          this.currentMode = mode.id;
-          icon.textContent = mode.icon;
-          label.textContent = mode.name;
-          dropdown.querySelectorAll(".iflow-mode-option").forEach((opt) => {
-            opt.removeClass("selected");
-          });
-          el.addClass("selected");
-          this.plugin.settings.lastUsedMode = mode.id;
-          await this.plugin.saveSettings();
-          selector.removeClass("open");
-        };
-      });
-    });
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      document.querySelectorAll(".iflow-model-selector.open, .iflow-mode-selector.open").forEach((el) => {
-        el.removeClass("open");
-      });
-      selector.toggleClass("open", !selector.hasClass("open"));
-    };
-    const closeHandler = (e) => {
-      if (!selector.contains(e.target)) {
-        selector.removeClass("open");
-      }
-    };
-    document.addEventListener("click", closeHandler);
-    return selector;
-  }
-  createThinkingToggle(container) {
-    const toggle = container.createEl("button", {
-      cls: "iflow-thinking-toggle"
-    });
-    if (this.thinkingEnabled) {
-      toggle.addClass("active");
-    }
-    const icon = toggle.createSpan({ cls: "iflow-thinking-icon", text: "\u{1F9E0}" });
-    const label = toggle.createSpan({ text: t().ui.thinking });
-    toggle.onclick = async () => {
-      this.thinkingEnabled = !this.thinkingEnabled;
-      toggle.toggleClass("active", this.thinkingEnabled);
-      this.plugin.settings.lastUsedThinking = this.thinkingEnabled;
-      await this.plugin.saveSettings();
-    };
-    return toggle;
-  }
   // ============================================
   // Conversation Management
   // ============================================
@@ -2147,7 +2378,8 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
 		`;
     const newBtn = selector.createEl("button", {
       cls: "iflow-new-conversation-btn",
-      text: "+"
+      text: "+",
+      attr: { "aria-label": getButtonAriaLabel("newConversation") }
     });
     newBtn.onclick = () => this.createNewConversation();
     const panel = selector.createDiv({ cls: "iflow-conversation-panel hidden" });
@@ -2218,10 +2450,32 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
       }
     });
     if (filteredConversations.length === 0) {
-      listContainer.createDiv({
-        cls: "iflow-conversation-empty",
-        text: searchQuery ? t().ui.noConversationsFound : t().ui.noConversations
-      });
+      const emptyEl = listContainer.createDiv({ cls: "iflow-conversation-empty" });
+      if (searchQuery) {
+        emptyEl.createSpan({ text: t().ui.noConversationsFound });
+        const clearBtn = emptyEl.createEl("button", {
+          cls: "iflow-conversation-empty-action",
+          text: t().ui.clearSearch
+        });
+        clearBtn.onclick = () => {
+          var _a;
+          const input = (_a = listContainer.closest(".iflow-conversation-panel")) == null ? void 0 : _a.querySelector("input");
+          if (input) {
+            input.value = "";
+            this.renderConversationList(listContainer, "");
+          }
+        };
+      } else {
+        emptyEl.createSpan({ text: t().ui.noConversations });
+        const newBtn = emptyEl.createEl("button", {
+          cls: "iflow-conversation-empty-action",
+          text: t().ui.startNewConversation
+        });
+        newBtn.onclick = () => {
+          this.createNewConversation();
+          this.closeConversationPanel();
+        };
+      }
     }
   }
   renderConversationItem(container, conversation) {
@@ -2241,7 +2495,8 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     });
     const deleteBtn = item.createEl("button", {
       cls: "iflow-conversation-item-delete",
-      text: "\xD7"
+      text: "\xD7",
+      attr: { "aria-label": getButtonAriaLabel("deleteConversation") }
     });
     deleteBtn.onclick = (e) => {
       e.stopPropagation();
@@ -2315,11 +2570,7 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
   }
   createNewConversation() {
     this.closeConversationPanel();
-    this.conversationService.newConversation(
-      this.currentModel,
-      this.currentMode,
-      this.thinkingEnabled
-    );
+    this.conversationService.newConversation();
   }
   toggleConversationPanel() {
     this.showConversationPanel = !this.showConversationPanel;
@@ -2346,6 +2597,9 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     }
   }
   switchConversation(conversationId) {
+    if (this.currentConversationId) {
+      this.scrollPositionStore.save(this.currentConversationId, this.messagesContainer.scrollTop);
+    }
     this.conversationService.switchConversation(conversationId);
     this.closeConversationPanel();
   }
@@ -2367,17 +2621,18 @@ var IFlowChatView = class extends import_obsidian2.ItemView {
     current.messages.forEach((msg) => {
       this.messages.push({ role: msg.role, content: msg.content, id: msg.id });
     });
-    this.scrollToBottom();
+    const savedPos = this.currentConversationId ? this.scrollPositionStore.get(this.currentConversationId) : 0;
+    if (savedPos > 0) {
+      requestAnimationFrame(() => {
+        this.messagesContainer.scrollTop = savedPos;
+      });
+    } else {
+      this.scrollToBottom();
+    }
   }
   // ============================================
   // Update available options from iFlow CLI
   // ============================================
-  updateAvailableModels(models) {
-    this.availableModels = models;
-  }
-  updateAvailableModes(modes) {
-    this.availableModes = modes;
-  }
 };
 
 // src/app/settingsService.ts
@@ -2429,7 +2684,7 @@ function shouldCollapseView(hasLeaf, sidebarCollapsed, forceOpen = false) {
 }
 
 // src/app/windowsIflowLauncher.ts
-var path = __toESM(require("path"));
+var path2 = __toESM(require("path"));
 var fs = __toESM(require("fs"));
 function resolveWindowsIflowLaunch(port, deps = {}) {
   var _a, _b, _c;
@@ -2438,8 +2693,8 @@ function resolveWindowsIflowLaunch(port, deps = {}) {
     throw new Error("APPDATA is not set");
   }
   const existsSync2 = (_c = deps.existsSync) != null ? _c : fs.existsSync;
-  const npmBinDir = path.join(appData, "npm");
-  const entryJs = path.join(
+  const npmBinDir = path2.join(appData, "npm");
+  const entryJs = path2.join(
     npmBinDir,
     "node_modules",
     "@iflow-ai",
@@ -2450,7 +2705,7 @@ function resolveWindowsIflowLaunch(port, deps = {}) {
   if (!existsSync2(entryJs)) {
     throw new Error(`Cannot resolve iflow CLI entry.js at: ${entryJs}`);
   }
-  const siblingNodeExe = path.join(npmBinDir, "node.exe");
+  const siblingNodeExe = path2.join(npmBinDir, "node.exe");
   const command = existsSync2(siblingNodeExe) ? siblingNodeExe : "node";
   return {
     command,
@@ -2464,9 +2719,36 @@ function resolveWindowsIflowLaunch(port, deps = {}) {
   };
 }
 
+// src/ui/chat/diagnosticsReport.ts
+var STATE_LABEL = {
+  connected: "\u5DF2\u8FDE\u63A5",
+  disconnected: "\u672A\u8FDE\u63A5",
+  detecting: "\u68C0\u6D4B\u4E2D",
+  reconnecting: "\u91CD\u8FDE\u4E2D"
+};
+function buildDiagnosticsReport(input) {
+  const { connectionState, lastError, usedBytes, totalBytes, port } = input;
+  const pct = (usedBytes / totalBytes * 100).toFixed(1);
+  const state = STATE_LABEL[connectionState];
+  const lines = [
+    `\u8FDE\u63A5\u72B6\u6001\uFF1A${state}`,
+    `\u670D\u52A1\u7AEF\u53E3\uFF1A${port}`,
+    `\u5B58\u50A8\u5360\u7528\uFF1A${pct}%\uFF08${formatBytes(usedBytes)} / ${formatBytes(totalBytes)}\uFF09`
+  ];
+  if (lastError !== null) {
+    lines.push(`\u6700\u8FD1\u9519\u8BEF\uFF1A${lastError}`);
+  }
+  return lines.join("\n");
+}
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
 // src/main.ts
-var { spawn } = require("child_process");
-var path2 = require("path");
+var { spawn: spawn2 } = require("child_process");
+var path3 = require("path");
 var DEFAULT_SETTINGS = {
   iflowPort: 8090,
   iflowTimeout: 6e4,
@@ -2474,9 +2756,6 @@ var DEFAULT_SETTINGS = {
   excludedTags: ["private", "sensitive"],
   language: "zh-CN",
   autoAttachFile: true,
-  lastUsedModel: "glm-4.7",
-  lastUsedMode: "default",
-  lastUsedThinking: false,
   autoStartSdk: true
   // Enabled by default
 };
@@ -2564,14 +2843,14 @@ var IFlowPlugin = class extends import_obsidian3.Plugin {
         console.log("[iFlow] Starting SDK on port", port);
         if (process.platform === "win32") {
           const launch = resolveWindowsIflowLaunch(port);
-          this.sdkProcess = spawn(launch.command, launch.args, {
+          this.sdkProcess = spawn2(launch.command, launch.args, {
             shell: false,
             detached: true,
             windowsHide: true,
             stdio: "ignore"
           });
         } else {
-          this.sdkProcess = spawn("iflow", [
+          this.sdkProcess = spawn2("iflow", [
             "--experimental-acp",
             "--port",
             String(port),
@@ -2644,26 +2923,37 @@ var IFlowSettingTab = class extends import_obsidian3.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     const settings = t().settings;
+    containerEl.createEl("h3", { text: "\u754C\u9762\u4E0E\u8BED\u8A00" });
     new import_obsidian3.Setting(containerEl).setName(settings.language).setDesc(settings.languageDesc).addDropdown((dropdown) => dropdown.addOption("zh-CN", "\u4E2D\u6587\u7B80\u4F53").addOption("en-US", "English").setValue(this.plugin.settings.language).onChange(async (value) => {
       this.plugin.settings.language = value;
       await this.plugin.saveSettings();
       initI18n(value);
       this.display();
     }));
-    new import_obsidian3.Setting(containerEl).setName("\u81EA\u52A8\u542F\u52A8 SDK").setDesc("\u63D2\u4EF6\u52A0\u8F7D\u65F6\u81EA\u52A8\u542F\u52A8 iFlow SDK\uFF08\u63A8\u8350\u5F00\u542F\uFF09").addToggle((toggle) => toggle.setValue(this.plugin.settings.autoStartSdk).onChange(async (value) => {
+    containerEl.createEl("h3", { text: "\u8FDE\u63A5\u4E0E\u670D\u52A1" });
+    new import_obsidian3.Setting(containerEl).setName("\u81EA\u52A8\u542F\u52A8 SDK").setDesc("Obsidian \u52A0\u8F7D\u63D2\u4EF6\u65F6\u81EA\u52A8\u542F\u52A8 iFlow SDK\uFF0C\u9996\u6B21\u5B89\u88C5\u540E\u63A8\u8350\u5F00\u542F").addToggle((toggle) => toggle.setValue(this.plugin.settings.autoStartSdk).onChange(async (value) => {
       this.plugin.settings.autoStartSdk = value;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian3.Setting(containerEl).setName("\u91CD\u542F SDK").setDesc("\u624B\u52A8\u91CD\u542F iFlow SDK \u670D\u52A1").addButton((button) => button.setButtonText("\u91CD\u542F").onClick(async () => {
+    new import_obsidian3.Setting(containerEl).setName("SDK \u64CD\u4F5C").setDesc("\u91CD\u542F\u4F1A\u7EC8\u6B62\u5E76\u91CD\u65B0\u542F\u52A8 SDK \u8FDB\u7A0B\uFF1B\u91CD\u65B0\u68C0\u6D4B\u4EC5\u9A8C\u8BC1\u5F53\u524D\u7AEF\u53E3\u662F\u5426\u53EF\u8FBE\uFF0C\u4E0D\u4F1A\u91CD\u542F\u8FDB\u7A0B").addButton((button) => button.setButtonText("\u91CD\u542F SDK").onClick(async () => {
       button.setButtonText("\u542F\u52A8\u4E2D...");
       button.setDisabled(true);
       const success = await this.plugin.startSdk();
-      button.setButtonText("\u91CD\u542F");
+      button.setButtonText("\u91CD\u542F SDK");
       button.setDisabled(false);
       if (success) {
         new import_obsidian3.Notice("SDK \u91CD\u542F\u6210\u529F\uFF01");
         this.display();
+      } else {
+        new import_obsidian3.Notice("SDK \u91CD\u542F\u5931\u8D25\uFF0C\u8BF7\u786E\u8BA4 iflow CLI \u5DF2\u5B89\u88C5\u5E76\u5728 PATH \u4E2D");
       }
+    })).addButton((button) => button.setButtonText("\u91CD\u65B0\u68C0\u6D4B").onClick(async () => {
+      button.setButtonText("\u68C0\u6D4B\u4E2D...");
+      button.setDisabled(true);
+      const connected = await this.plugin.iflowService.checkConnection();
+      button.setButtonText("\u91CD\u65B0\u68C0\u6D4B");
+      button.setDisabled(false);
+      new import_obsidian3.Notice(connected ? "\u2713 SDK \u8FDE\u63A5\u6B63\u5E38" : "\u2717 SDK \u672A\u54CD\u5E94\uFF0C\u8BF7\u5C1D\u8BD5\u91CD\u542F");
     }));
     new import_obsidian3.Setting(containerEl).setName(settings.port).setDesc(settings.portDesc).addText((text) => text.setValue(String(this.plugin.settings.iflowPort)).onChange(async (value) => {
       const port = parseInt(value);
@@ -2679,29 +2969,52 @@ var IFlowSettingTab = class extends import_obsidian3.PluginSettingTab {
         await this.plugin.saveSettings();
       }
     }));
+    containerEl.createEl("h3", { text: "\u4E0A\u4E0B\u6587\u4E0E\u9644\u4EF6" });
     new import_obsidian3.Setting(containerEl).setName(settings.autoScroll).setDesc(settings.autoScrollDesc).addToggle((toggle) => toggle.setValue(this.plugin.settings.enableAutoScroll).onChange(async (value) => {
       this.plugin.settings.enableAutoScroll = value;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian3.Setting(containerEl).setName(settings.autoAttachFile).setDesc(settings.autoAttachFileDesc).addToggle((toggle) => toggle.setValue(this.plugin.settings.autoAttachFile).onChange(async (value) => {
+    new import_obsidian3.Setting(containerEl).setName(settings.autoAttachFile).setDesc("\u53D1\u9001\u6D88\u606F\u65F6\u81EA\u52A8\u5C06\u5F53\u524D\u7F16\u8F91\u5668\u4E2D\u6253\u5F00\u7684\u7B14\u8BB0\u4F5C\u4E3A\u4E0A\u4E0B\u6587\u9644\u4EF6\u53D1\u9001\uFF0C\u8BA9\u6A21\u578B\u4E86\u89E3\u4F60\u6B63\u5728\u67E5\u770B\u7684\u5185\u5BB9").addToggle((toggle) => toggle.setValue(this.plugin.settings.autoAttachFile).onChange(async (value) => {
       this.plugin.settings.autoAttachFile = value;
       await this.plugin.saveSettings();
     }));
-    new import_obsidian3.Setting(containerEl).setName(settings.excludedTags).setDesc(settings.excludedTagsDesc).addText((text) => text.setValue(this.plugin.settings.excludedTags.join(", ")).onChange(async (value) => {
+    new import_obsidian3.Setting(containerEl).setName(settings.excludedTags).setDesc("\u5E26\u6709\u8FD9\u4E9B\u6807\u7B7E\u7684\u7B14\u8BB0\u4E0D\u4F1A\u88AB\u81EA\u52A8\u9644\u52A0\uFF08\u7528\u82F1\u6587\u9017\u53F7\u5206\u9694\uFF0C\u5982 private, sensitive\uFF09\u3002\u5DF2\u901A\u8FC7\u81EA\u52A8\u9644\u4EF6\u529F\u80FD\u624B\u52A8\u6DFB\u52A0\u7684\u6587\u4EF6\u4E0D\u53D7\u6B64\u89C4\u5219\u5F71\u54CD").addText((text) => text.setValue(this.plugin.settings.excludedTags.join(", ")).onChange(async (value) => {
       this.plugin.settings.excludedTags = value.split(",").map((tag) => tag.trim()).filter((tag) => tag.length > 0);
       await this.plugin.saveSettings();
     }));
+    containerEl.createEl("h3", { text: "\u8BCA\u65AD\u4E0E\u72B6\u6001" });
+    const diagnosticsEl = containerEl.createEl("div", { cls: "iflow-diagnostics" });
+    diagnosticsEl.createEl("p", { text: "\u6B63\u5728\u68C0\u6D4B\u8FDE\u63A5\u72B6\u6001\u2026", cls: "iflow-diagnostics-text" });
+    this.plugin.iflowService.checkConnection().then((connected) => {
+      const storageSize = (() => {
+        var _a, _b;
+        try {
+          let total = 0;
+          for (const key of Object.keys(localStorage)) {
+            if (key.startsWith("iflow-conversations-")) {
+              total += (_b = (_a = localStorage.getItem(key)) == null ? void 0 : _a.length) != null ? _b : 0;
+            }
+          }
+          return total;
+        } catch (e) {
+          return 0;
+        }
+      })();
+      const report = buildDiagnosticsReport({
+        connectionState: connected ? "connected" : "disconnected",
+        lastError: null,
+        usedBytes: storageSize,
+        totalBytes: 4 * 1024 * 1024,
+        port: this.plugin.settings.iflowPort
+      });
+      diagnosticsEl.empty();
+      report.split("\n").forEach((line) => {
+        diagnosticsEl.createEl("p", { text: line, cls: "iflow-diagnostics-line" });
+      });
+    });
     containerEl.createEl("h3", { text: settings.cliRequirements });
     containerEl.createEl("p", {
       text: settings.cliRequirementsDesc
-    });
-    const statusDiv = containerEl.createEl("div", { cls: "iflow-status" });
-    statusDiv.createEl("p", { text: settings.connectionStatus });
-    const statusText = statusDiv.createEl("span", { cls: "iflow-status-text" });
-    statusText.textContent = settings.checking;
-    this.plugin.iflowService.checkConnection().then((connected) => {
-      statusText.textContent = connected ? settings.connected : settings.disconnected;
-      statusText.className = "iflow-status-text " + (connected ? "connected" : "disconnected");
     });
   }
 };

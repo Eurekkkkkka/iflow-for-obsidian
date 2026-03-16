@@ -2,44 +2,9 @@
  * English language pack
  */
 export const enUS = {
-	// Model names
-	models: {
-		'glm-4.7': 'GLM-4.7',
-		'glm-5': 'GLM-5',
-		'deepseek-v3.2-chat': 'DeepSeek-V3.2',
-		'iFlow-ROME-30BA3B': 'iFlow-ROME-30BA3B(Preview)',
-		'qwen3-coder-plus': 'Qwen3-Coder-Plus',
-		'kimi-k2-thinking': 'Kimi-K2-Thinking',
-		'minimax-m2.5': 'MiniMax-M2.5',
-		'minimax-m2.1': 'MiniMax-M2.1',
-		'kimi-k2-0905': 'Kimi-K2-0905',
-		'kimi-k2.5': 'Kimi-K2.5',
-	},
-
-	// Mode names
-	modes: {
-		default: {
-			name: 'Normal',
-			icon: '⚡'
-		},
-		yolo: {
-			name: 'YOLO',
-			icon: '🚀'
-		},
-		smart: {
-			name: 'Smart',
-			icon: '🧠'
-		},
-		plan: {
-			name: 'Plan',
-			icon: '📋'
-		},
-	},
-
 	// UI Labels
 	ui: {
 		send: 'Send',
-		thinking: 'Thinking',
 		newConversation: 'New Conversation',
 		today: 'Today',
 		yesterday: 'Yesterday',
@@ -47,6 +12,8 @@ export const enUS = {
 		older: 'Older',
 		messages: 'messages',
 		noMessages: '0 messages',
+		clearSearch: 'Clear search',
+		startNewConversation: 'Start new conversation',
 		noConversations: 'No conversations yet',
 		noConversationsFound: 'No conversations found',
 		searchConversations: 'Search conversations...',
@@ -87,10 +54,30 @@ export const enUS = {
 		assistant: 'iFlow',
 	},
 
+	// Runtime status
+	status: {
+		detecting: 'Detecting',
+		connected: 'Connected',
+		starting: 'Starting',
+		startFailed: 'Start failed',
+		authFailed: 'Auth failed',
+		sending: 'Sending',
+		completed: 'Completed',
+		timedOut: 'Timed out',
+		reconnecting: 'Reconnecting',
+		disconnected: 'Disconnected',
+	},
+
 	// Errors
 	errors: {
 		streamingTimeout: 'Streaming timeout',
 		connectionFailed: 'Connection failed',
+		sendFailed: 'Send failed, please try again',
+		sdkNotInstalled: 'iFlow CLI not found. Run: npm install -g @iflow-ai/iflow-cli@latest',
+		sdkAuthFailed: 'iFlow CLI authentication failed. Please check your account.',
+		sdkPortBusy: 'Port {port} is in use. Change the port in Settings and retry.',
+		sdkStartTimeout: 'iFlow CLI start timed out. Run `iflow` manually then retry.',
+		genericHint: 'If the issue persists, restart Obsidian or check the console logs.',
 	},
 
 	// Settings page
@@ -134,6 +121,10 @@ export const enUS = {
 	context: {
 		file: '📄 ',
 		attached: 'Attached: ',
+		autoLabel: 'auto',
+		manualLabel: 'manual',
+		removeContext: 'Remove',
+		selectionLabel: 'Selection',
 	},
 };
 

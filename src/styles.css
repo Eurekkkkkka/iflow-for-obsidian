@@ -6,28 +6,56 @@
 :root {
 	--iflow-brand: #7c4dff;
 	--iflow-brand-rgb: 124, 77, 255;
+	--iflow-brand-light: #a78bfa;
+	--iflow-brand-dark: #5b21b6;
+	--iflow-accent: #a855f7;
+	--iflow-accent-rgb: 168, 85, 247;
 	--iflow-error: #dc3545;
 	--iflow-success: #28a745;
 	--iflow-warning: #ffc107;
+	--iflow-radius-sm: 6px;
+	--iflow-radius-md: 10px;
+	--iflow-radius-lg: 14px;
+	--iflow-shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
+	--iflow-shadow-md: 0 4px 12px rgba(0, 0, 0, 0.12);
+	--iflow-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.16);
 }
 
 /* ============================================
-   Top Bar - Conversation Selector
+   Top Bar
 ============================================ */
 .iflow-top-bar {
 	display: flex;
 	align-items: center;
-	gap: var(--spacing-sm, 8px);
-	padding: var(--spacing-sm, 8px) var(--spacing-md, 12px);
+	gap: 8px;
+	padding: 10px 14px;
 	background: var(--background-secondary);
-	border-bottom: 1px solid var(--background-modifier-border);
+	border-bottom: none;
+	position: relative;
 	flex-shrink: 0;
+}
+
+/* Gradient accent line at the bottom of the top bar */
+.iflow-top-bar::after {
+	content: '';
+	position: absolute;
+	bottom: 0;
+	left: 0;
+	right: 0;
+	height: 2px;
+	background: linear-gradient(90deg,
+		transparent 0%,
+		var(--iflow-brand) 20%,
+		var(--iflow-accent) 50%,
+		var(--iflow-brand) 80%,
+		transparent 100%);
+	opacity: 0.5;
 }
 
 .iflow-conversation-selector {
 	display: flex;
 	align-items: center;
-	gap: var(--spacing-sm, 8px);
+	gap: 8px;
 	flex: 1;
 	min-width: 0;
 	position: relative;
@@ -36,16 +64,16 @@
 .iflow-conversation-trigger {
 	display: flex;
 	align-items: center;
-	gap: 6px;
-	padding: 4px 8px;
+	gap: 8px;
+	padding: 6px 10px;
 	background: transparent;
 	border: none;
-	border-radius: 4px;
+	border-radius: var(--iflow-radius-sm);
 	color: var(--text-normal);
 	font-size: 13px;
-	font-weight: 500;
+	font-weight: 600;
 	cursor: pointer;
-	transition: background 0.2s ease;
+	transition: background 0.15s ease;
 	flex: 1;
 	min-width: 0;
 	text-align: left;
@@ -83,28 +111,34 @@
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	width: 28px;
-	height: 28px;
+	width: 32px;
+	height: 32px;
 	padding: 0;
-	background: var(--iflow-brand);
+	background: linear-gradient(135deg, var(--iflow-brand) 0%, var(--iflow-accent) 100%);
 	color: white;
 	border: none;
-	border-radius: 4px;
+	border-radius: var(--iflow-radius-sm);
 	font-size: 18px;
 	font-weight: bold;
 	cursor: pointer;
-	transition: background 0.2s ease;
+	transition: transform 0.15s ease, box-shadow 0.15s ease;
 	flex-shrink: 0;
+	box-shadow: 0 2px 8px rgba(var(--iflow-brand-rgb), 0.25);
 }
 
 .iflow-new-conversation-btn:hover {
-	background: color-mix(in srgb, var(--iflow-brand) 85%, black);
+	transform: translateY(-1px);
+	box-shadow: 0 4px 12px rgba(var(--iflow-brand-rgb), 0.35);
+}
+
+.iflow-new-conversation-btn:active {
+	transform: translateY(0) scale(0.95);
 }
 
 /* Conversation Panel */
 .iflow-conversation-panel {
 	position: absolute;
-	top: 100%;
+	top: calc(100% + 4px);
 	left: 0;
 	width: auto;
 	min-width: 300px;
@@ -112,8 +146,8 @@
 	max-height: 500px;
 	background: var(--background-secondary);
 	border: 1px solid var(--background-modifier-border);
-	border-radius: 0 0 8px 8px;
-	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+	border-radius: var(--iflow-radius-md);
+	box-shadow: var(--iflow-shadow-lg);
 	z-index: 1000;
 	display: flex;
 	flex-direction: column;
@@ -132,17 +166,19 @@
 
 .iflow-conversation-search input {
 	width: 100%;
-	padding: 6px 10px;
+	padding: 8px 12px;
 	background: var(--background-primary);
 	border: 1px solid var(--background-modifier-border);
-	border-radius: 4px;
+	border-radius: var(--iflow-radius-sm);
 	color: var(--text-normal);
 	font-size: 12px;
 	outline: none;
+	transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
 .iflow-conversation-search input:focus {
 	border-color: var(--iflow-brand);
+	box-shadow: 0 0 0 2px rgba(var(--iflow-brand-rgb), 0.1);
 }
 
 .iflow-conversation-list {
@@ -163,10 +199,11 @@
 .iflow-conversation-item {
 	display: flex;
 	align-items: center;
-	padding: 8px 12px;
+	padding: 10px 12px;
 	cursor: pointer;
 	transition: background 0.15s ease;
 	position: relative;
+	border-left: 3px solid transparent;
 }
 
 .iflow-conversation-item:hover {
@@ -174,7 +211,8 @@
 }
 
 .iflow-conversation-item.active {
-	background: rgba(var(--iflow-brand-rgb), 0.15);
+	background: rgba(var(--iflow-brand-rgb), 0.1);
+	border-left-color: var(--iflow-brand);
 }
 
 .iflow-conversation-item-info {
@@ -208,20 +246,21 @@
 	background: none;
 	border: none;
 	color: var(--text-muted);
-	font-size: 18px;
+	font-size: 16px;
 	cursor: pointer;
-	padding: 2px 6px;
-	border-radius: 4px;
+	padding: 4px 6px;
+	border-radius: var(--iflow-radius-sm);
 	opacity: 0;
-	transition: all 0.2s ease;
+	transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
 	flex-shrink: 0;
 }
 
 .iflow-conversation-item:hover .iflow-conversation-item-delete {
-	opacity: 1;
+	opacity: 0.7;
 }
 
 .iflow-conversation-item-delete:hover {
+	opacity: 1 !important;
 	color: var(--iflow-error);
 	background: rgba(220, 53, 69, 0.1);
 }
@@ -231,6 +270,103 @@
 	text-align: center;
 	color: var(--text-muted);
 	font-size: 13px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+}
+
+.iflow-conversation-empty-action {
+	margin-top: 4px;
+	padding: 6px 14px;
+	background: linear-gradient(135deg, var(--iflow-brand), var(--iflow-accent));
+	color: white;
+	border: none;
+	border-radius: var(--iflow-radius-sm);
+	font-size: 12px;
+	cursor: pointer;
+	transition: transform 0.15s ease, box-shadow 0.15s ease;
+	box-shadow: 0 2px 6px rgba(var(--iflow-brand-rgb), 0.25);
+}
+
+.iflow-conversation-empty-action:hover {
+	transform: translateY(-1px);
+	box-shadow: 0 4px 10px rgba(var(--iflow-brand-rgb), 0.35);
+}
+
+/* ============================================
+   Connection Status Bar (Task 2.3)
+============================================ */
+.iflow-connection-status {
+	display: flex;
+	align-items: center;
+	gap: 5px;
+	padding: 2px var(--spacing-md, 12px);
+	font-size: 11px;
+	border-bottom: 1px solid transparent;
+	flex-shrink: 0;
+	transition: all 0.3s ease;
+}
+
+.iflow-status-dot {
+	font-size: 9px;
+	line-height: 1;
+}
+
+.iflow-status-label {
+	color: var(--text-muted);
+	letter-spacing: 0.2px;
+}
+
+.iflow-status-connected .iflow-status-dot {
+	color: var(--iflow-success);
+}
+
+.iflow-status-disconnected .iflow-status-dot,
+.iflow-status-detecting .iflow-status-dot {
+	color: var(--text-faint);
+}
+
+.iflow-status-reconnecting .iflow-status-dot {
+	color: var(--iflow-warning);
+	animation: iflow-pulse 1.5s ease-in-out infinite;
+}
+
+/* Only show the status bar when disconnected or reconnecting (connected state is low-noise) */
+.iflow-status-connected {
+	opacity: 0.5;
+}
+
+.iflow-status-disconnected,
+.iflow-status-reconnecting {
+	background: rgba(220, 53, 69, 0.06);
+	border-bottom-color: rgba(220, 53, 69, 0.15);
+	opacity: 1;
+}
+
+.iflow-status-detecting {
+	opacity: 0.6;
+}
+
+@keyframes iflow-pulse {
+	0%, 100% { opacity: 1; }
+	50% { opacity: 0.4; }
+}
+
+/* Task 7.2: Settings diagnostics section */
+.iflow-diagnostics {
+	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	padding: 10px 14px;
+	margin: 4px 0 12px;
+}
+
+.iflow-diagnostics-line {
+	font-size: 12px;
+	color: var(--text-muted);
+	margin: 2px 0;
+	font-family: var(--font-monospace);
 }
 
 /* ============================================
@@ -276,21 +412,27 @@
 /* ============================================
    Messages Area
 ============================================ */
+@keyframes iflow-messages-fadein {
+	from { opacity: 0.55; }
+	to   { opacity: 1; }
+}
+
 .iflow-messages {
 	flex: 1 1 auto;
 	overflow-y: auto;
 	overflow-x: hidden;
-	padding: 16px 12px;
+	padding: 20px 14px;
 	display: flex;
 	flex-direction: column;
-	gap: 12px;
+	gap: 14px;
 	min-height: 0;
 	scroll-behavior: smooth;
+	animation: iflow-messages-fadein 0.15s ease;
 }
 
 /* Scrollbar styling */
 .iflow-messages::-webkit-scrollbar {
-	width: 6px;
+	width: 5px;
 }
 
 .iflow-messages::-webkit-scrollbar-track {
@@ -298,12 +440,12 @@
 }
 
 .iflow-messages::-webkit-scrollbar-thumb {
-	background: var(--background-modifier-border);
+	background: rgba(var(--iflow-brand-rgb), 0.15);
 	border-radius: 3px;
 }
 
 .iflow-messages::-webkit-scrollbar-thumb:hover {
-	background: var(--background-modifier-border-hover);
+	background: rgba(var(--iflow-brand-rgb), 0.3);
 }
 
 /* ============================================
@@ -316,20 +458,21 @@
 	align-items: center;
 	justify-content: center;
 	text-align: center;
-	padding: 60px 20px;
+	padding: 60px 24px;
 	min-height: 200px;
 }
 
 .iflow-welcome-greeting {
 	display: flex;
 	align-items: center;
-	gap: 12px;
-	margin-bottom: 16px;
+	gap: 14px;
+	margin-bottom: 20px;
 }
 
 .iflow-welcome-emoji {
-	font-size: 36px;
+	font-size: 40px;
 	line-height: 1;
+	filter: drop-shadow(0 2px 8px rgba(var(--iflow-brand-rgb), 0.3));
 	animation: iflow-welcome-wave 2s ease-in-out infinite;
 }
 
@@ -347,21 +490,23 @@
 
 .iflow-welcome-text {
 	font-family: var(--font-interface);
-	font-size: 28px;
-	font-weight: 600;
+	font-size: 30px;
+	font-weight: 700;
 	color: var(--text-normal);
-	background: linear-gradient(135deg, var(--iflow-brand) 0%, #a855f7 50%, #ec4899 100%);
+	background: linear-gradient(135deg, var(--iflow-brand) 0%, var(--iflow-accent) 40%, #ec4899 100%);
 	-webkit-background-clip: text;
 	-webkit-text-fill-color: transparent;
 	background-clip: text;
+	letter-spacing: -0.02em;
 }
 
 .iflow-welcome-subtitle {
 	color: var(--text-muted);
-	font-size: 15px;
-	line-height: 1.6;
+	font-size: 14px;
+	line-height: 1.7;
 	margin: 0;
-	opacity: 0.8;
+	opacity: 0.75;
+	max-width: 360px;
 }
 
 .iflow-welcome h2 {
@@ -384,11 +529,11 @@
    Message Bubbles
 ============================================ */
 .iflow-message {
-	padding: 10px 14px;
-	border-radius: 8px;
+	padding: 12px 16px;
+	border-radius: var(--iflow-radius-md);
 	max-width: 95%;
 	word-wrap: break-word;
-	animation: iflow-message-fade-in 0.2s ease-out;
+	animation: iflow-message-fade-in 0.25s ease-out;
 }
 
 @keyframes iflow-message-fade-in {
@@ -405,11 +550,11 @@
 /* User message */
 .iflow-message-user {
 	position: relative;
-	background: linear-gradient(135deg, var(--iflow-brand) 0%, color-mix(in srgb, var(--iflow-brand) 85%, black) 100%);
+	background: linear-gradient(135deg, var(--iflow-brand) 0%, color-mix(in srgb, var(--iflow-brand) 80%, var(--iflow-accent)) 100%);
 	color: white;
 	align-self: flex-end;
 	border-end-end-radius: 4px;
-	box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+	box-shadow: 0 2px 8px rgba(var(--iflow-brand-rgb), 0.2);
 }
 
 /* Text selection in user messages */
@@ -555,12 +700,6 @@
 	gap: 8px;
 }
 
-.iflow-control-right {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-}
-
 /* ============================================
    Context Area
 ============================================ */
@@ -575,9 +714,24 @@
 .iflow-input-container {
 	flex: 0 0 auto;
 	position: relative;
-	padding: 12px;
+	padding: 12px 14px 14px;
 	background: var(--background-primary);
-	border-top: 1px solid var(--background-modifier-border);
+	border-top: none;
+}
+
+/* Subtle top fade border */
+.iflow-input-container::before {
+	content: '';
+	position: absolute;
+	top: 0;
+	left: 14px;
+	right: 14px;
+	height: 1px;
+	background: linear-gradient(90deg,
+		transparent,
+		var(--background-modifier-border) 20%,
+		var(--background-modifier-border) 80%,
+		transparent);
 }
 
 /* Input wrapper */
@@ -586,281 +740,19 @@
 	display: flex;
 	flex-direction: row;
 	align-items: flex-end;
-	gap: 12px;
-	min-height: 60px;
+	gap: 10px;
+	min-height: 56px;
 	max-height: 300px;
 	border: 1px solid var(--background-modifier-border);
-	border-radius: 8px;
+	border-radius: var(--iflow-radius-lg);
 	background: var(--background-primary);
 	transition: border-color 0.15s ease, box-shadow 0.15s ease;
-	padding: 8px;
+	padding: 8px 8px 8px 12px;
 }
 
 .iflow-input-wrapper:focus-within {
 	border-color: var(--iflow-brand);
-	box-shadow: 0 0 0 2px rgba(var(--iflow-brand-rgb), 0.1);
-}
-
-/* ============================================
-   Model Selector
-============================================ */
-.iflow-model-selector {
-	position: relative;
-	display: flex;
-	align-items: center;
-}
-
-.iflow-model-btn {
-	display: flex;
-	align-items: center;
-	gap: 4px;
-	padding: 4px 8px;
-	border-radius: 4px;
-	cursor: pointer;
-	color: var(--text-muted);
-	font-size: 12px;
-	transition: color 0.2s ease;
-	background: transparent;
-	border: none;
-}
-
-.iflow-model-btn:hover {
-	color: var(--text-normal);
-	background: var(--background-modifier-hover);
-}
-
-.iflow-model-btn.ready {
-	color: var(--iflow-brand);
-}
-
-.iflow-model-label {
-	font-weight: 500;
-}
-
-.iflow-model-chevron {
-	display: flex;
-	align-items: center;
-}
-
-.iflow-model-chevron svg {
-	width: 12px;
-	height: 12px;
-}
-
-.iflow-model-dropdown {
-	position: absolute;
-	top: 100%;
-	left: 0;
-	margin-top: 4px;
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	background: var(--background-secondary);
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 6px;
-	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-	z-index: 1000;
-	width: max-content;
-	max-width: 300px;
-	padding: 4px;
-	opacity: 0;
-	visibility: hidden;
-	transform: translateY(-4px);
-	transition: opacity 0.15s ease, visibility 0.15s ease, transform 0.15s ease;
-	max-height: 300px;
-	overflow-y: auto;
-}
-
-/* Show dropdown when .open class is added (click toggle) */
-.iflow-model-selector.open .iflow-model-dropdown {
-	opacity: 1;
-	visibility: visible;
-	transform: translateY(0);
-}
-
-.iflow-model-option {
-	padding: 6px 10px;
-	cursor: pointer;
-	font-size: 12px;
-	color: var(--text-muted);
-	border-radius: 4px;
-	transition: background 0.1s ease, color 0.1s ease;
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-
-.iflow-model-option:hover {
-	background: var(--background-modifier-hover);
-	color: var(--text-normal);
-}
-
-.iflow-model-option.selected {
-	background: rgba(var(--iflow-brand-rgb), 0.15);
-	color: var(--iflow-brand);
-	font-weight: 500;
-}
-
-.iflow-model-option .model-description {
-	font-size: 10px;
-	opacity: 0.7;
-	margin-left: 4px;
-}
-
-/* ============================================
-   Mode Selector (Permission Toggle)
-============================================ */
-.iflow-mode-selector {
-	position: relative;
-	display: flex;
-	align-items: center;
-}
-
-.iflow-mode-btn {
-	display: flex;
-	align-items: center;
-	gap: 4px;
-	padding: 4px 8px;
-	border-radius: 6px;
-	cursor: pointer;
-	background: var(--background-secondary);
-	border: 1px solid var(--background-modifier-border);
-	color: var(--text-muted);
-	font-size: 12px;
-	transition: all 0.2s ease;
-}
-
-.iflow-mode-btn:hover {
-	color: var(--text-normal);
-	background: var(--background-modifier-hover);
-}
-
-.iflow-mode-label {
-	font-size: 11px;
-	font-weight: 500;
-	min-width: 40px;
-	text-transform: uppercase;
-	letter-spacing: 0.5px;
-}
-
-.iflow-mode-selector.plan-active .iflow-mode-label {
-	color: #5c948c;
-	font-weight: 600;
-}
-
-.iflow-mode-dropdown {
-	position: absolute;
-	top: 100%;
-	right: 0;
-	margin-top: 4px;
-	display: flex;
-	flex-direction: column;
-	gap: 2px;
-	background: var(--background-secondary);
-	border: 1px solid var(--background-modifier-border);
-	border-radius: 6px;
-	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-	z-index: 1000;
-	width: max-content;
-	padding: 4px;
-	opacity: 0;
-	visibility: hidden;
-	transform: translateY(-4px);
-	transition: opacity 0.15s ease, visibility 0.15s ease, transform 0.15s ease;
-}
-
-/* Show dropdown when .open class is added (click toggle) */
-.iflow-mode-selector.open .iflow-mode-dropdown {
-	opacity: 1;
-	visibility: visible;
-	transform: translateY(0);
-}
-
-.iflow-mode-chevron {
-	display: flex;
-	align-items: center;
-}
-
-.iflow-mode-chevron svg {
-	width: 12px;
-	height: 12px;
-}
-
-.iflow-mode-option {
-	padding: 6px 10px;
-	cursor: pointer;
-	font-size: 12px;
-	color: var(--text-muted);
-	border-radius: 4px;
-	transition: background 0.1s ease, color 0.1s ease;
-	white-space: nowrap;
-	display: flex;
-	align-items: center;
-	gap: 6px;
-}
-
-.iflow-mode-option:hover {
-	background: var(--background-modifier-hover);
-	color: var(--text-normal);
-}
-
-.iflow-mode-option.selected {
-	background: rgba(var(--iflow-brand-rgb), 0.15);
-	color: var(--iflow-brand);
-	font-weight: 500;
-}
-
-.iflow-mode-icon {
-	width: 14px;
-	height: 14px;
-	opacity: 0.7;
-}
-
-/* Mode-specific colors */
-.iflow-mode-option[data-mode="yolo"] .iflow-mode-icon {
-	color: #dc3545;
-}
-
-.iflow-mode-option[data-mode="plan"] .iflow-mode-icon {
-	color: #5c948c;
-}
-
-.iflow-mode-option[data-mode="smart"] .iflow-mode-icon {
-	color: #60a5fa;
-}
-
-.iflow-mode-option[data-mode="default"] .iflow-mode-icon {
-	color: var(--iflow-brand);
-}
-
-/* Thinking toggle */
-.iflow-thinking-toggle {
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	padding: 4px 8px;
-	border-radius: 4px;
-	cursor: pointer;
-	font-size: 11px;
-	color: var(--text-muted);
-	background: transparent;
-	border: 1px solid var(--background-modifier-border);
-	transition: all 0.2s ease;
-}
-
-.iflow-thinking-toggle:hover {
-	background: var(--background-modifier-hover);
-}
-
-.iflow-thinking-toggle.active {
-	color: var(--iflow-brand);
-	background: rgba(var(--iflow-brand-rgb), 0.1);
-	border-color: var(--iflow-brand);
-}
-
-.iflow-thinking-icon {
-	width: 14px;
-	height: 14px;
+	box-shadow: 0 0 0 3px rgba(var(--iflow-brand-rgb), 0.08);
 }
 
 /* Textarea */
@@ -895,38 +787,49 @@
 	opacity: 0.7;
 }
 
-/* Send button */
+/* Send button — round icon style */
 .iflow-send-button {
 	flex-shrink: 0;
-	padding: 12px 28px;
-	background: linear-gradient(135deg, var(--iflow-brand) 0%, color-mix(in srgb, var(--iflow-brand) 85%, #a855f7) 100%);
+	width: 40px;
+	height: 40px;
+	padding: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: linear-gradient(135deg, var(--iflow-brand) 0%, var(--iflow-accent) 100%);
 	color: #ffffff !important;
 	border: none;
-	border-radius: 8px;
+	border-radius: 50%;
 	font-size: 14px;
 	font-weight: 600;
 	cursor: pointer;
-	transition: all 0.2s ease;
+	transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
 	box-shadow: 0 2px 8px rgba(var(--iflow-brand-rgb), 0.3);
 	white-space: nowrap;
 }
 
 .iflow-send-button:hover {
-	background: linear-gradient(135deg, color-mix(in srgb, var(--iflow-brand) 90%, black) 0%, color-mix(in srgb, var(--iflow-brand) 75%, #a855f7) 100%);
-	transform: translateY(-1px);
-	box-shadow: 0 4px 12px rgba(var(--iflow-brand-rgb), 0.4);
+	transform: translateY(-1px) scale(1.05);
+	box-shadow: 0 4px 14px rgba(var(--iflow-brand-rgb), 0.4);
 }
 
 .iflow-send-button:active {
-	transform: translateY(0) scale(0.98);
-	box-shadow: 0 2px 6px rgba(var(--iflow-brand-rgb), 0.3);
+	transform: translateY(0) scale(0.95);
+	box-shadow: 0 1px 4px rgba(var(--iflow-brand-rgb), 0.3);
 }
 
-.iflow-send-button:disabled {
+.iflow-send-button:disabled,
+.iflow-send-button.iflow-send-disabled {
 	opacity: 0.5;
 	cursor: not-allowed;
 	transform: none;
 	box-shadow: none;
+	pointer-events: none;
+}
+
+/* Task 6.2: Streaming label transition */
+.iflow-send-button {
+	transition: all 0.2s ease, opacity 0.15s ease;
 }
 
 /* ============================================
@@ -1030,7 +933,7 @@
    Dark Mode Adjustments
 ============================================ */
 .theme-dark .iflow-message-user {
-	background: linear-gradient(135deg, var(--iflow-brand) 0%, color-mix(in srgb, var(--iflow-brand) 80%, white) 100%);
+	background: linear-gradient(135deg, var(--iflow-brand) 0%, color-mix(in srgb, var(--iflow-brand) 75%, var(--iflow-accent)) 100%);
 }
 
 .theme-dark .iflow-message-content code {
@@ -1101,8 +1004,13 @@
 	padding: 4px 8px 4px 4px;
 	background: var(--background-primary);
 	border: 1px solid var(--background-modifier-border);
-	border-radius: 6px;
+	border-radius: var(--iflow-radius-sm);
 	max-width: 200px;
+	transition: border-color 0.15s ease;
+}
+
+.iflow-image-chip:hover {
+	border-color: var(--iflow-brand);
 }
 
 .iflow-image-thumb {
@@ -1154,6 +1062,27 @@
 .iflow-image-remove:hover {
 	color: var(--iflow-error);
 	background: rgba(220, 53, 69, 0.1);
+}
+
+/* Task 6.5: Bulk clear all images button */
+.iflow-image-clear-all {
+	font-size: 11px;
+	color: var(--text-muted);
+	padding: 2px 8px;
+	border-radius: 4px;
+	cursor: pointer;
+	border: 1px solid var(--background-modifier-border);
+	background: transparent;
+	flex-shrink: 0;
+	white-space: nowrap;
+	align-self: center;
+	transition: background 0.15s ease, color 0.15s ease;
+}
+
+.iflow-image-clear-all:hover {
+	background: rgba(220, 53, 69, 0.1);
+	color: var(--iflow-error);
+	border-color: var(--iflow-error);
 }
 
 /* ============================================
@@ -1362,18 +1291,18 @@
 	color: var(--text-normal);
 }
 
-/* Language badge */
-.iflow-code-block.language-typescript::before,
-.iflow-code-block.language-javascript::before,
-.iflow-code-block.language-python::before,
-.iflow-code-block.language-json::before {
-	content: attr(class);
-	display: block;
+/* Language badge — driven by data-lang attribute, works for any language */
+.iflow-code-block[data-lang]::before {
+	content: attr(data-lang);
+	display: inline-block;
 	font-size: 10px;
-	color: var(--text-muted);
+	color: var(--iflow-brand);
 	text-transform: uppercase;
 	margin-bottom: 8px;
 	letter-spacing: 0.5px;
+	font-family: var(--font-monospace);
+	font-weight: 600;
+	opacity: 0.7;
 }
 
 /* Inline code */
@@ -1503,7 +1432,7 @@
 .iflow-tool-call {
 	margin: 8px 0;
 	border: 1px solid var(--background-modifier-border);
-	border-radius: 8px;
+	border-radius: var(--iflow-radius-md);
 	overflow: hidden;
 	background: var(--background-secondary);
 }
@@ -1516,6 +1445,7 @@
 	background: var(--background-primary);
 	border-bottom: 1px solid var(--background-modifier-border);
 	cursor: pointer;
+	transition: background 0.15s ease;
 }
 
 .iflow-tool-icon {
@@ -1585,4 +1515,219 @@
 
 .theme-dark .iflow-thinking {
 	background: rgba(var(--iflow-brand-rgb), 0.08);
+}
+
+/* ============================================
+   Tables (Phase 3.2)
+============================================ */
+.iflow-table {
+	width: 100%;
+	border-collapse: collapse;
+	margin: 10px 0;
+	font-size: 13px;
+	overflow-x: auto;
+	display: block;
+}
+
+.iflow-th,
+.iflow-td {
+	border: 1px solid var(--background-modifier-border);
+	padding: 6px 12px;
+	text-align: left;
+	line-height: 1.5;
+}
+
+.iflow-th {
+	background: var(--background-secondary);
+	font-weight: 600;
+	color: var(--text-normal);
+}
+
+.iflow-td {
+	color: var(--text-normal);
+}
+
+.iflow-table tr:nth-child(even) .iflow-td {
+	background: rgba(var(--iflow-brand-rgb), 0.03);
+}
+
+/* ============================================
+   List containers (Phase 3.3)
+============================================ */
+.iflow-ul,
+.iflow-ol {
+	margin: 4px 0;
+	padding: 0;
+	list-style: none;
+}
+
+/* ============================================
+   Theme readability (Phase 3.5)
+============================================ */
+
+/* Ensure inline code is readable in both themes */
+.theme-light .iflow-inline-code {
+	background: rgba(var(--iflow-brand-rgb), 0.08);
+	color: #5b21b6;
+}
+
+.theme-dark .iflow-inline-code {
+	background: rgba(var(--iflow-brand-rgb), 0.15);
+	color: #c4b5fd;
+}
+
+/* Code block readability */
+.theme-light .iflow-code-block {
+	background: #f8f9fa !important;
+	border-color: #e0e0e0;
+}
+
+.theme-light .iflow-code-block code {
+	color: #1a1a2e;
+}
+
+.theme-dark .iflow-code-block {
+	background: #1e1e2e !important;
+}
+
+.theme-dark .iflow-code-block code {
+	color: #cdd6f4;
+}
+
+/* Language badge readability */
+.theme-light .iflow-code-block[data-lang]::before {
+	color: #6b7280;
+}
+
+/* Table theme readability */
+.theme-dark .iflow-th {
+	background: var(--background-secondary);
+}
+
+.theme-dark .iflow-table tr:nth-child(even) .iflow-td {
+	background: rgba(var(--iflow-brand-rgb), 0.06);
+}
+
+/* Table overflow on narrow sidepanel */
+.iflow-table {
+	max-width: 100%;
+}
+/* ============================================
+   Thought Stream Block (Phase 4.4)
+============================================ */
+
+.iflow-thought-block {
+	margin: 6px 0 8px;
+	border: 1px solid var(--background-modifier-border);
+	border-left: 3px solid var(--color-purple, #a855f7);
+	border-radius: 6px;
+	overflow: hidden;
+	font-size: 12px;
+	opacity: 0.85;
+}
+
+.iflow-thought-toggle {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 5px 10px;
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	cursor: pointer;
+	user-select: none;
+	font-size: 11px;
+	font-weight: 500;
+	letter-spacing: 0.02em;
+}
+
+.iflow-thought-toggle:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.iflow-thought-content {
+	padding: 8px 12px;
+	color: var(--text-muted);
+	line-height: 1.55;
+	white-space: pre-wrap;
+	word-break: break-word;
+	max-height: 400px;
+	overflow-y: auto;
+	transition: max-height 0.2s ease, padding 0.2s ease;
+}
+
+/* Collapsed state: hide content, shrink toggle */
+.iflow-thought-collapsed .iflow-thought-content {
+	display: none;
+}
+
+.iflow-thought-collapsed .iflow-thought-toggle::before {
+	content: '▶ ';
+}
+
+/* Expanded state indicator */
+.iflow-thought-block:not(.iflow-thought-collapsed) .iflow-thought-toggle::before {
+	content: '▼ ';
+}
+
+/* Dark theme subtle glow */
+.theme-dark .iflow-thought-block {
+	border-left-color: #7c3aed;
+	background: rgba(124, 58, 237, 0.04);
+}
+
+/* ============================================
+   Tool Call Auto-Collapse (Phase 4.5)
+============================================ */
+
+.iflow-tool-call.iflow-tool-completed .iflow-tool-details {
+	display: none;
+}
+
+.iflow-tool-call.iflow-tool-collapsed .iflow-tool-details {
+	display: none;
+}
+
+.iflow-tool-header {
+	cursor: pointer;
+}
+
+.iflow-tool-header:hover {
+	background: var(--background-modifier-hover);
+	border-radius: 4px;
+}
+
+/* ============================================
+   Phase 8: 视觉精修与可访问性 (8.1-8.6)
+============================================ */
+
+/* Phase 8.5: 统一所有图标控件的 focus-visible 焦点环 */
+.iflow-new-conversation-btn:focus-visible,
+.iflow-conversation-trigger:focus-visible,
+.iflow-conversation-item-delete:focus-visible,
+.iflow-image-clear-all:focus-visible,
+.iflow-context-remove:focus-visible,
+.iflow-image-remove:focus-visible,
+.iflow-image-modal-close:focus-visible {
+	outline: 2px solid var(--iflow-brand);
+	outline-offset: 2px;
+}
+
+/* Phase 8.3: 补全窄边栏图标按钮 touch target 最小尺寸 */
+.iflow-context-remove,
+.iflow-image-remove {
+	min-width: 20px;
+	min-height: 20px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+}
+
+/* Phase 8.6: 修正 transition */
+.iflow-conversation-item-delete {
+	transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+
+.iflow-new-conversation-btn {
+	transition: background 0.15s ease;
 }

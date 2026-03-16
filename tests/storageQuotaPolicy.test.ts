@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	calculateStorageQuotaInfo,
 	cleanupOldConversations,
+	buildQuotaWarningMessage,
 	MAX_STORAGE_BYTES,
 } from '../src/domain/conversation/storageQuotaPolicy';
 
@@ -29,5 +30,35 @@ describe('storageQuotaPolicy', () => {
 		expect(result.conversations).toHaveLength(50);
 		expect(result.removedCount).toBe(5);
 		expect(result.currentConversationId).toBe('c-54');
+	});
+});
+
+describe('buildQuotaWarningMessage', () => {
+	it('returns null when usage is below warning threshold', () => {
+		const info = calculateStorageQuotaInfo('a'.repeat(100));
+		expect(buildQuotaWarningMessage(info)).toBeNull();
+	});
+
+	it('returns warning message when approaching limit', () => {
+		const data = 'a'.repeat(Math.ceil(MAX_STORAGE_BYTES * 0.85));
+		const info = calculateStorageQuotaInfo(data);
+		const msg = buildQuotaWarningMessage(info);
+		expect(msg).not.toBeNull();
+		expect(msg).toContain('接近上限');
+	});
+
+	it('returns critical message when at limit', () => {
+		const data = 'a'.repeat(Math.ceil(MAX_STORAGE_BYTES * 0.96));
+		const info = calculateStorageQuotaInfo(data);
+		const msg = buildQuotaWarningMessage(info);
+		expect(msg).not.toBeNull();
+		expect(msg).toContain('已达上限');
+	});
+
+	it('critical message includes cleanup suggestion', () => {
+		const data = 'a'.repeat(Math.ceil(MAX_STORAGE_BYTES * 0.96));
+		const info = calculateStorageQuotaInfo(data);
+		const msg = buildQuotaWarningMessage(info)!;
+		expect(msg).toContain('请清理');
 	});
 });

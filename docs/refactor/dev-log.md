@@ -248,6 +248,76 @@
 - 修复 TS 兼容：Node 内置模块导入改为 `import * as path/fs`。
 - `tests/windowsIflowLauncher.test.ts`：4/4 通过。
 
+---
+
+## 2026-03-14 Phase 4 — 思考流与工具展示优化
+
+### 任务范围
+
+按 `开发文档00.md §4 任务4.2–4.7` 完整执行 TDD：将 `agent_thought_chunk` 与 `agent_message_chunk` 分离渲染，并将完成态工具调用自动折叠。
+
+### 任务 4.2 — ToolCallMapper 思考流分离（TDD Red→Green）
+
+**问题根因：** `mapSessionUpdateToEvents()` 中 `agent_thought_chunk` 与 `agent_message_chunk` 均映射到 `{ type: 'stream' }`，导致 AI 的"思考内容"混入最终回答流。
+
+**Red（测试先行）：** 在 `tests/toolCallMapper.test.ts` 新增 5 个用例：
+1. `agent_thought_chunk` 映射到 `{ type: 'thought' }`，而非 `stream`。
+2. `agent_message_chunk` 仍映射到 `{ type: 'stream' }`。
+3. `thought` 与 `stream` 事件类型不能相同。
+4. `agent_turn_end` 只发出 `end`，不污染 thought/stream。
+5. `tool_result` 错误状态正确映射。
+
+确认 2 条失败（Red 验证通过）。
+
+**Green（最小实现）：**
+- `src/iflowService.ts`：`IFlowMessage.type` 联合类型新增 `'thought'`；`SendMessageOptions` 新增 `onThought?: (chunk: string) => void`；`sendMessage()` 注册 `thought` 事件监听。
+- `src/features/chat/toolCallMapper.ts`：提取 `extractText()` 私有辅助函数；`agent_thought_chunk` 分支提前返回 `[{ type: 'thought', content }]`，不再触及 stream/end/tool 逻辑。
+
+结果：**70 个测试全部通过**（新增 5 条）。
+
+### 任务 4.3+4.4 — MessageListView 思考块展示（TDD Red→Green）
+
+**Red（测试先行）：** 扩展 `tests/messageListView.test.ts`，新增 6 个用例（同时重写 mock 为支持嵌套 `querySelector` 的功能性 mock）：
+1. `showThought(id, content)` 在消息内创建 `.iflow-thought-block`。
+2. `showThought` 正确设置初始 `innerHTML`。
+3. `updateThought(id, content)` 更新 `.iflow-thought-content`。
+4. 思考内容不出现在 `.iflow-message-content` 主体区域。
+5. `finalizeThought(id)` 为 `.iflow-thought-block` 添加 `iflow-thought-collapsed` class。
+6. 消息 ID 不存在时 `showThought` 不抛出异常。
+
+确认 6 条失败（Red 验证通过）。
+
+**Green（实现）：** `src/ui/chat/messageListView.ts` 新增三个方法：
+- `showThought(messageId, content)`：若无思考块则创建（包含 toggle 按钮 + content div），并设置初始内容。
+- `updateThought(messageId, content)`：更新 `.iflow-thought-content` 的 `innerHTML`。
+- `finalizeThought(messageId)`：为思考块添加 `iflow-thought-collapsed` class，使其流结束后自动折叠。
+
+**chatView 集成（`src/chatView.ts`）：**
+- 新增 `private currentThought = ''` 状态字段。
+- `cleanup()` 函数中增加 `this.currentThought = ''` 重置。
+- `sendMessage()` 的 `iflowService.sendMessage()` 调用中增加 `onThought` 回调：累积 chunk → 调用 `messageListView.showThought()`（幂等）。
+- `onEnd` 中增加 `messageListView.finalizeThought(assistantMsgId)` 调用，流结束后自动折叠思考块。
+
+**CSS（`src/styles.css`）：** 新增思考块样式：
+- `.iflow-thought-block`：紫色左边框，半透明背景，圆角。
+- `.iflow-thought-toggle`：可点击标题行，`▼/▶` 状态指示。
+- `.iflow-thought-content`：灰色文字，最大高度 400px，可滚动。
+- `.iflow-thought-collapsed .iflow-thought-content { display: none }` 折叠逻辑。
+
+结果：**76 个测试全部通过**（新增 6 条）。
+
+### 任务 4.5 — ToolCallView 完成态自动折叠
+
+**实现（`src/ui/chat/toolCallView.ts`）：** 在 `showOrUpdate()` 中，当 `tool.status === 'completed'` 时为工具容器添加 `iflow-tool-completed` class。
+
+**CSS：** `.iflow-tool-call.iflow-tool-completed .iflow-tool-details { display: none }` 自动隐藏详情区；`.iflow-tool-header { cursor: pointer }` 保留视觉可点击提示。
+
+### 任务 4.7 — 最终验证
+
+- `npm run test:run`：**17 文件 / 76 测试** 全部通过 ✅
+- `npm run build`：TypeScript 无错误，esbuild 构建干净 ✅
+
+
 ### Refactor
 
 - 修改 `src/main.ts` 的 `startSdk()`：
@@ -266,3 +336,424 @@
 
 - 风险：极少数环境若 npm 全局目录非 `APPDATA\\npm`，可能导致 `entry.js` 解析失败。
 - 后续建议：可增加“自定义 CLI 路径”设置项，作为企业环境/便携环境兜底。
+---
+
+## 2026-03-13 阶段优化任务记录（Phase 2 & Phase 3 并行）
+
+根据 `docs/开发文档00.md` §4 实施顺序，阶段二（运行时反馈与上下文可见性）与阶段三（消息内容渲染与阅读质量）并行推进。
+
+### 阶段三 Task 3.1：修复代码块语言标签
+
+- 目标：代码块的语言标签改为 `data-lang` attribute 驱动，覆盖任意语言，移除原来仅支持少数语言的硬编码 CSS class selector。
+- 实现：`messageRenderer.ts` 中为 `<pre>` 添加 `data-lang="${lang}"`；CSS 改为 `.iflow-code-block[data-lang]::before { content: attr(data-lang) }`。
+- 测试：新增 `data-lang` 存在/不存在两个用例通过。
+- 结果：测试通过，构建通过。
+
+### 阶段三 Task 3.2：补 Markdown 表格支持
+
+- 目标：解析模型输出的 Markdown 表格，生成可读的 `<table>` HTML，支持深浅主题。
+- 实现：`messageRenderer.ts` 新增 `renderMarkdownTables()` 用多行正则匹配 header/separator/body，生成带 `iflow-table/iflow-th/iflow-td` 的语义化 HTML；`styles.css` 补充表格样式含奇偶行及主题适配。
+- 测试：表格渲染、HTML 转义两个用例通过。
+- 结果：测试通过，构建通过。
+- 风险与后续：极端复杂表格（合并单元格）不在支持范围，后续按需扩展。
+
+### 阶段三 Task 3.3：统一列表容器渲染
+
+- 目标：消除孤立的 `<li>` 元素，将连续列表项包装进 `<ul>/<ol>` 容器，修复有序编号依赖 CSS counter 但无 `<ol>` 包裹的问题。
+- 实现：`messageRenderer.ts` 新增 `wrapListItems()` 按行扫描列表项，自动插入 `<ul class="iflow-ul">/<ol class="iflow-ol">` 开关；CSS 补充容器规则。
+- 测试：无序列表、有序列表、混合列表三个用例通过。
+- 结果：测试通过，构建通过。
+
+### 阶段三 Task 3.4：改进 Thinking 文本匹配
+
+- 目标：支持标准 Markdown blockquote（`> text`）作为思考块，降低对特定文案格式的脆弱依赖；保留 `* Thinking...` 兼容模式。
+- 实现：`renderMessage()` Pass 3 中新增 `^>\s+(.+)$` 正则，原 `\*\s*(Thinking.+)` 保留。
+- 测试：blockquote 匹配、Legacy 模式、普通段落不误匹配三个用例通过。
+- 结果：测试通过，构建通过。
+
+### 阶段三 Task 3.5：深浅主题可读性 CSS
+
+- 目标：确保代码块、行内代码、表格在深浅主题下均清晰可辨，优先使用 Obsidian CSS 变量。
+- 实现：`styles.css` 补充 `.theme-light/.theme-dark` 分支：行内代码颜色、代码块背景/代码颜色、语言标签颜色、表格样式差异。
+- 结果：主要渲染元素深浅主题可读性有保障，无硬编码主题色（使用 Obsidian 变量 + CSS `color-mix`）。
+
+### 阶段三 Task 3.6：补 messageRenderer 测试覆盖
+
+- 目标：为阶段三所有渲染优化建立测试护栏。
+- 实现：`tests/messageRenderer.test.ts` 从 3 个扩充到 **14 个**用例，覆盖代码块标签、表格、列表容器、思考块、代码块内容保护。
+- 结果：17 个测试文件、**65 个**测试全部通过。
+
+### 阶段二 Task 2.1：建立运行时状态文案体系
+
+- 目标：统一插件所有运行时状态文案，消除多处分散的描述差异，为后续 UI 接入提供 i18n 来源。
+- 实现：`i18n/zh-CN.ts` 和 `i18n/en-US.ts` 新增 `status` 键组（detecting/connected/starting/startFailed/authFailed/sending/completed/timedOut/reconnecting/disconnected）；扩展 `errors` 键组（sendFailed/sdkNotInstalled/sdkAuthFailed/sdkPortBusy/sdkStartTimeout/genericHint）；`context` 键组补充 autoLabel/manualLabel/removeContext/selectionLabel。
+- 结果：构建通过，无 TS 错误。
+
+### 阶段二 Task 2.3：聊天视图连接状态展示
+
+- 目标：把链接状态从一次性 Notice 扩展为聊天视图内可持续感知的轻量状态条。
+- 实现：`chatView.ts` topBar 下方新增 `iflow-connection-status` 状态条；`renderConnectionStatus()` 负责切换 4 种状态（detecting/connected/disconnected/reconnecting）与视觉样式；`startConnectionStatusPolling()` 每 10 s 轮询一次；`onClose()` 中清理定时器，防止内存泄漏。CSS 补充状态条样式，断连时浅红背景提示，重连时脉冲动画。
+- 结果：构建通过，无 TS 错误。
+
+### 阶段二 Task 2.7：空状态与搜索无结果引导
+
+- 目标：区分"无历史对话"和"搜索无结果"两种空态，提供可操作的下一步引导按钮。
+- 实现：`renderConversationList()` 中搜索无结果时显示"清空搜索"按钮，无历史时显示"新建对话"按钮；i18n 补充 `clearSearch`/`startNewConversation` 键；CSS 为 `.iflow-conversation-empty-action` 补充交互样式。
+- 结果：构建通过，无 TS 错误。
+
+### 阶段二 Task 2.8 & 2.9：统一发送状态与用户可见错误规范
+
+- 目标：发送过程状态条实时反映当前状态；错误不再暴露原始 JS 异常，改为统一可读文案。
+- 实现：`sendMessage()` 发送前调 `renderConnectionStatus('detecting')`，`onEnd` 时恢复 `'connected'`，`onError`/catch 时切换 `'disconnected'` 并显示 `t().errors.sendFailed` 替代原来的 `Error: ${raw}`。
+- 结果：构建通过，全量 **65 个测试全部通过**。
+
+---
+
+## 2026-03-14 Phase 5 — 顶部信息架构重组
+
+### 任务范围
+
+按 `开发文档00.md §3 阶段五` 执行：将低频配置控件（模型/模式/思考开关）从顶部常驻区降级为二级配置面板（popover），释放主区空间；同时在顶部保留可感知的状态摘要（当前模型 + 思考状态）。
+
+### Task 5.1（分析）— 顶部控件频率审计
+
+梳理现有顶部栏结构（共 3 层）：
+1. **`iflow-top-bar`**：会话选择器标题按钮 + 历史面板 + 新建按钮
+2. **`iflow-connection-status`**：Phase 2 连接状态条
+3. **`iflow-control-bar`**：模型选择 + 模式选择 + 思考开关（每次对话偶尔调整，**低频**）
+
+决策：`iflow-control-bar` 整行占位但使用率低，降级为 `iflow-top-bar` 右侧的 ⚙️ 配置按钮，原有控件迁入 popover 面板。
+
+### Task 5.2+5.3 — 二级入口与会话层级重构（TDD Red→Green）
+
+**Red（测试先行）：** 新建 `tests/topBarConfigView.test.ts`，测试两个纯函数：
+- `abbreviateModelLabel(modelId)` — 将完整模型 ID 映射为短标签（如 `'glm-4.7'` → `'GLM-4.7'`，`'deepseek-v3.2-chat'` → `'DS-V3'`，未知 ID 原样返回）
+- `buildTopBarSummary(modelId, modeId, thinkingEnabled)` — 生成摘要文本（带 🧠 指示器）
+
+8 个测试用例，确认全部失败（模块不存在，Red 验证通过）。
+
+**Green（最小实现）：** 新建 `src/ui/chat/topBarConfigView.ts`：
+- `MODEL_ABBREV` 查找表映射全部 10 个已知模型 ID
+- `abbreviateModelLabel()` 利用查找表，未知 ID fallback 原样返回
+- `buildTopBarSummary()` 返回 `"${label} 🧠"` 或纯 `"${label}"`
+
+结果：**84 个测试全部通过**（新增 8 条）。
+
+**chatView.ts 重构：**
+- `import { buildTopBarSummary }` 从 `topBarConfigView`
+- 新增 `private configSummaryEl: HTMLElement | null = null;`
+- `onOpen()` 中删除 `iflow-control-bar` 整行；改为在 `iflow-top-bar` 右侧创建 `iflow-topbar-actions`：
+  - `iflow-topbar-summary`（span，展示摘要文本）
+  - `iflow-config-btn`（⚙️ 按钮）
+  - `iflow-config-panel`（popover，内含 model + mode + thinking 控件，默认隐藏，点击 ⚙️ 切换 `.open` class 显示）
+  - 点击外部自动关闭面板
+- `createModelSelector`/`createModeSelector`/`createThinkingToggle` 各自的选中处理末尾追加 `this.updateConfigSummary()` 调用
+- 新增 `updateConfigSummary()` 方法：`this.configSummaryEl.textContent = buildTopBarSummary(...)`
+
+### Task 5.4 — 顶部状态摘要
+
+状态摘要已通过 `iflow-topbar-summary` 实现：显示当前模型的短标签，思考模式开启时追加 🧠。摘要在每次切换模型/模式/思考开关后实时更新（`updateConfigSummary()`）。连接状态摘要复用 Phase 2 的 `iflow-connection-status` 条，不重复。
+
+### Task 5.5 — 窄侧栏验证
+
+CSS 添加 `@media (max-width: 320px)` 响应规则：配置面板在窄侧栏下右对齐改为左对齐，防止溢出视窗。`iflow-topbar-summary` 设 `max-width: 80px` + `text-overflow: ellipsis` 防止撑宽顶部栏。
+
+### Task 5.6 — 最终验证
+
+- `npm run test:run`：**18 文件 / 84 测试** 全部通过 ✅
+- `npm run build`：TypeScript 无错误，esbuild 构建干净 ✅
+
+---
+
+## 2026-03-15 Phase 6 — 高频交互效率优化
+
+### 任务范围
+
+按 `开发文档00.md §3 阶段六` 执行：提升发送区域、会话切换和图片管理的交互品质。本轮覆盖 Task 6.2（输入区禁用状态）、Task 6.3（滚动位置恢复）、Task 6.4（会话切换过渡动画）、Task 6.5（批量清除图片）。
+
+### Task 6.2 — 发送区禁用状态（TDD）
+
+**Red（测试先行）：** 新建 `tests/inputState.test.ts`，针对纯函数 `resolveInputState({isStreaming, isEmpty})` 编写 6 条用例：
+- 未流式 + 非空 → `sendDisabled: false`，按钮文案 `'发送'`
+- 未流式 + 空内容 → `sendDisabled: true`
+- 任意情况下流式 → `sendDisabled: true`，按钮文案 `'生成中…'`
+- placeholder 随状态变化
+
+确认 6 条用例全部失败（模块不存在），Red 阶段验证通过。
+
+**Green（最小实现）：** 新建 `src/ui/chat/inputState.ts`：
+```typescript
+export function resolveInputState({ isStreaming, isEmpty }: InputStateInput): InputStateResult {
+    if (isStreaming) {
+        return { sendDisabled: true, buttonLabel: '生成中…', placeholder: '正在生成回答，请稍候…' };
+    }
+    return { sendDisabled: isEmpty, buttonLabel: '发送', placeholder: '输入消息… (Enter 发送，Shift+Enter 换行)' };
+}
+```
+
+**chatView 集成：**
+- `import { resolveInputState }` + `private sendButton: HTMLButtonElement | null`
+- `onOpen()` 存储 `sendButton` 引用，`textarea` 绑定 `input` 事件
+- 新增 `updateInputState()` 方法：调用 `resolveInputState`，设置 `disabled`、`textContent`、toggleClass `iflow-send-disabled`
+- `sendMessage()` 在 `isStreaming = true` 后立即调用 `updateInputState()`
+- `cleanup()` 在重置流式状态后调用 `updateInputState()`
+
+**CSS：** 在 `:disabled` 规则基础上补充 `.iflow-send-button.iflow-send-disabled` 联合选择器，确保类名方式也触发禁用样式；添加 `pointer-events: none`。
+
+### Task 6.3 — 滚动位置恢复（TDD）
+
+**Red（测试先行）：** 新建 `tests/scrollPositionStore.test.ts`，针对 `ScrollPositionStore` 编写 5 条用例：
+- 未知 ID 返回 0
+- save/get 往返一致
+- 覆盖写入
+- 多会话独立存储
+- clear 后恢复为 0
+
+**Green（最小实现）：** 新建 `src/ui/chat/scrollPositionStore.ts`：
+```typescript
+export class ScrollPositionStore {
+    private readonly positions = new Map<string, number>();
+    get(conversationId: string): number { return this.positions.get(conversationId) ?? 0; }
+    save(conversationId: string, scrollTop: number): void { this.positions.set(conversationId, scrollTop); }
+    clear(conversationId: string): void { this.positions.delete(conversationId); }
+}
+```
+
+**chatView 集成：**
+- `switchConversation()` 切换前调用 `scrollPositionStore.save(currentId, messagesContainer.scrollTop)`
+- `loadMessagesFromConversation()` 渲染完成后用 `requestAnimationFrame` 恢复已保存的 `scrollTop`；新会话 fallback 到 `scrollToBottom()`
+
+### Task 6.4 — 会话切换过渡动画
+
+在 `.iflow-messages` 规则中追加 `animation: iflow-messages-fadein 0.15s ease`，并定义对应 `@keyframes`（from `opacity: 0.55` → to `opacity: 1`）。切换会话时消息区域以轻微淡入呈现，减少内容跳变的视觉冲击。
+
+### Task 6.5 — 批量清除图片
+
+`updateImagePreview()` 在附件数量 > 1 时在预览区末尾渲染 `iflow-image-clear-all` 按钮（显示"清空全部 (N)"），点击后调用 `attachedImages.clear()` + `updateImagePreview()`。
+
+**CSS：** 新增 `.iflow-image-clear-all` 规则（小字号、边框、悬停变红）。
+
+### Task 6.6 — 最终验证
+
+- `npm run test:run`：**20 文件 / 95 测试** 全部通过 ✅（新增 11 条：inputState × 6 + scrollPositionStore × 5）
+- `npm run build`：TypeScript 无错误，esbuild 构建干净 ✅
+
+---
+
+## 2026-03-15 Phase 7 — 设置页与诊断闭环
+
+### 任务范围
+
+按 `开发文档00.md §3 阶段七` 执行：将分散在日志和 Notice 中的恢复能力产品化，重组设置页结构，新增运行时诊断入口，将存储配额警告推送给用户。
+
+### Task 7.2 + TDD — 诊断报告纯函数（TDD）
+
+**Red（测试先行）：** 新建 `tests/diagnosticsReport.test.ts`，针对 `buildDiagnosticsReport({connectionState, lastError, usedBytes, totalBytes, port})` 编写 8 条用例：
+- 各连接状态（connected/disconnected/detecting/reconnecting）产生对应关键词
+- 包含端口号
+- lastError 非空时出现在报告中
+- lastError 为 null 时无"最近错误"行
+- 存储占用百分比显示在报告中
+
+确认 8 条用例全部失败（模块不存在），Red 阶段验证通过。
+
+**Green（最小实现）：** 新建 `src/ui/chat/diagnosticsReport.ts`：
+```typescript
+export function buildDiagnosticsReport(input: DiagnosticsInput): string {
+    const lines = [
+        `连接状态：${STATE_LABEL[connectionState]}`,
+        `服务端口：${port}`,
+        `存储占用：${pct}%（${formatBytes(usedBytes)} / ${formatBytes(totalBytes)}）`,
+    ];
+    if (lastError !== null) lines.push(`最近错误：${lastError}`);
+    return lines.join('\n');
+}
+```
+
+### Task 7.5 + TDD — 存储配额警告文本（TDD）
+
+**Red（测试先行）：** 扩充 `tests/storageQuotaPolicy.test.ts`，在 `buildQuotaWarningMessage` describe 块中新增 4 条用例：
+- 低于警告阈值 → 返回 null
+- 接近上限 → 返回包含"接近上限"的字符串
+- 已达上限 → 返回包含"已达上限"的字符串
+- 已达上限时消息包含"请清理"建议
+
+**Green（最小实现）：** 在 `src/domain/conversation/storageQuotaPolicy.ts` 末尾追加 `buildQuotaWarningMessage(info: StorageQuotaInfo): string | null`。
+
+### Task 7.1 — 设置页分组重构
+
+将原来扁平的设置列表按用途分为三个 `<h3>` 区块：
+- **界面与语言**：语言切换
+- **连接与服务**：自动启动 SDK、SDK 操作、端口、超时
+- **上下文与附件**：自动滚动、自动附件、排除标签
+- **诊断与状态**（Task 7.2 落点）：诊断报告区
+
+### Task 7.3 — SDK 重启与重新检测
+
+原来的"重启 SDK"按钮扩充为并列两个按钮：
+- **重启 SDK**：终止并重新启动 SDK 进程，成功/失败均有 Notice 反馈
+- **重新检测**：仅调用 `iflowService.checkConnection()`，不重启进程，以 Notice 形式返回检测结果；按钮文案在检测期间变为"检测中…"，防重复点击
+
+### Task 7.4 — 附件相关设置描述优化
+
+- `autoAttachFile`：原描述"自动附加当前文件"→ 改为行为化表述"发送消息时自动将当前编辑器中打开的笔记作为上下文附件，让模型了解你正在查看的内容"
+- `excludedTags`：原描述补充"用英文逗号分隔"示例，并说明手动添加文件不受此规则影响
+
+### Task 7.2 — 运行时诊断入口（集成）
+
+设置页"诊断与状态"区域异步展示 `buildDiagnosticsReport()` 的输出：
+- 初始显示"正在检测连接状态…"占位
+- `checkConnection()` 返回后读取 localStorage 中所有 `iflow-conversations-*` key 计算存储用量，与端口信息一起传入 `buildDiagnosticsReport()` 输出完整报告
+- 每行独立渲染为 `<p class="iflow-diagnostics-line">` 单声道字体，背景色与正文区分
+
+### Task 7.5 — chatView 配额警告集成
+
+- `LocalStorageConversationRepository` 新增 `getStorageQuota()` 方法
+- `ConversationService` 通过鸭子类型检测暴露 `getStorageQuota()`
+- `chatView.ts` 中 `cleanup()` 末尾调用 `checkAndWarnQuota()`：首次配额接近时通过 `new Notice(msg, 6000)` 展示警告，同会话内仅展示一次（`quotaWarningShown` 标志）
+
+### Task 7.7 — 最终验证
+
+- `npm run test:run`：**21 文件 / 107 测试** 全部通过 ✅（新增 12 条：diagnosticsReport × 8 + buildQuotaWarningMessage × 4）
+- `npm run build`：TypeScript 无错误，esbuild 构建干净 ✅
+
+---
+
+## Phase 8 — 视觉精修与可访问性
+
+### 概述
+
+本阶段聚焦 UI 可访问性补全（Task 8.4）与视觉一致性提升（Tasks 8.1/8.2/8.3/8.5/8.6）。
+
+### Task 8.4 — aria-label 可访问性（TDD）
+
+**Red**：新增 `tests/ariaButtonLabels.test.ts`（8 个测试），测试 `getButtonAriaLabel(ButtonId)` 纯函数，验证每个按钮 ID 返回对应中文无障碍标签。
+
+**Green**：新增 `src/ui/chat/ariaButtonLabels.ts`：
+
+```typescript
+export type ButtonId =
+    | 'config' | 'newConversation' | 'imageRemove' | 'contextRemove'
+    | 'modalClose' | 'deleteConversation' | 'thinkingToggle';
+
+export function getButtonAriaLabel(id: ButtonId): string { ... }
+```
+
+映射表：`config` → `打开配置面板`，`newConversation` → `新建会话`，`imageRemove` → `移除图片`，`contextRemove` → `移除上下文文件`，`modalClose` → `关闭预览`，`deleteConversation` → `删除会话`，`thinkingToggle` → `切换深度思考模式`。
+
+**集成**：在 `src/chatView.ts` 中为全部 7 个图标控件补充 `aria-label`：
+
+| 控件 | 改动 |
+|------|------|
+| `iflow-config-btn` | 替换英文 aria-label 为 `getButtonAriaLabel('config')` |
+| `iflow-context-remove` | 新增 `role="button"`、aria-label、`tabindex="0"` |
+| `iflow-image-remove` | 新增 `role="button"`、aria-label、`tabindex="0"` |
+| `iflow-image-modal-close` | 新增 `role="button"`、aria-label、`tabindex="0"` |
+| `iflow-new-conversation-btn` | 新增 aria-label |
+| `iflow-conversation-item-delete` | 新增 aria-label |
+| `iflow-thinking-toggle` | 新增 aria-label |
+
+### Task 8.3 — 窄边栏 touch target 补全
+
+`.iflow-context-remove`、`.iflow-image-remove` 补充 `min-width: 20px; min-height: 20px; display: inline-flex`，保证可点击区域符合最低触控标准。
+
+### Task 8.5 — 统一 focus-visible 焦点环
+
+在 `src/styles.css` 末尾追加全局规则，为以下控件统一焦点环（2px solid var(--iflow-brand)，offset 2px）：
+
+`iflow-config-btn`、`iflow-new-conversation-btn`、`iflow-thinking-toggle`、`iflow-model-btn`、`iflow-mode-btn`、`iflow-conversation-trigger`、`iflow-conversation-item-delete`、`iflow-image-clear-all`、`iflow-context-remove`、`iflow-image-remove`、`iflow-image-modal-close`
+
+原来仅 `.iflow-message` 和 `.iflow-send-button` 有 focus-visible，本次全面补全。
+
+### Task 8.6 — 动画/过渡一致性
+
+修正三处宽泛的 `transition: all` 导致的噪音动画：
+
+- `.iflow-thinking-toggle`：`all 0.2s` → `background 0.15s ease, border-color 0.15s ease, color 0.15s ease`
+- `.iflow-conversation-item-delete`：`all 0.2s` → `opacity 0.15s ease, background 0.15s ease, color 0.15s ease`
+- `.iflow-new-conversation-btn`：`0.2s` → `0.15s`，统一时长
+
+### Task 8.7 — 最终验证
+
+- `npm run test:run`：**22 文件 / 115 测试** 全部通过 ✅（新增 8 条：ariaButtonLabels × 8）
+- `npm run build`：TypeScript 无错误，esbuild 构建干净 ✅
+
+---
+
+## Phase 9 — 测试、文档与发布准备
+
+### 概述
+
+本阶段目标是为整个阶段优化收尾：补全自动化测试护栏（Task 9.2）、建立人工回归清单（Task 9.3）、同步用户和开发文档（Task 9.4）、准备发布说明（Task 9.5）、建立发布前三类环境验收模板（Task 9.6）。
+
+### Task 9.2 — 思考流拆分边界测试（TDD）
+
+**Red**：向 `tests/toolCallMapper.test.ts` 和 `tests/messageListView.test.ts` 追加边界场景测试。`messageListView` 中的 `collectChildren` 辅助函数未定义导致 1 个测试失败，确认 Red 状态。
+
+**Green**：修正测试用例，改用 mock 已有的 `querySelector` API 替代辅助函数，所有测试通过。
+
+**新增 `toolCallMapper` 边界测试（4条）：**
+
+| 测试场景 | 覆盖目的 |
+|----------|----------|
+| `agent_thought_chunk` 空文本 → 返回 `[]` | 防止空事件注入流 |
+| `agent_thought_chunk` null content → 不抛出，返回 `[]` | 防御性：协议异常场景 |
+| `agent_thought_chunk` 非 text 类型 content → 返回 `[]` | 防止工具类型误路由为 thought |
+| 交错的 thought/stream 块各自路由到正确类型 | 混合流回归护栏 |
+
+**新增 `messageListView` 边界测试（4条）：**
+
+| 测试场景 | 覆盖目的 |
+|----------|----------|
+| `updateThought` 在 `showThought` 之前调用 → 不抛出，无 block 创建 | 防止空指针异常 |
+| `finalizeThought` 无 thought block → 不抛出 | 防御性：无思考轮次 |
+| `showThought` 多次调用 → 单一 block，内容更新为最新 | 防止 DOM 节点膨胀 |
+| stream 内容 (`updateMessage`) 不污染 thought block | 关键分离回归护栏 |
+
+### Task 9.3 — 人工回归清单
+
+新建 `docs/refactor/manual-regression-checklist.md`，涵盖：
+
+- 10 大场景类别：首次启动、基础对话、思考流、工具调用、文件上下文、图片附件、会话管理、失败恢复、可访问性与键盘、主题验证
+- 共 36 条可执行检查项，每条包含步骤与预期结果
+- 附 Task 9.6 发布前三类环境（深色/浅色/窄侧栏）验收表格
+
+### Task 9.4 — 文档同步
+
+**README.md**：在更新日志最前部添加 v0.8.0 条目，涵盖体验改进、视觉精修、诊断与恢复、代码质量四个方面。
+
+**CHEATSHEET.md**：文件结构速查从 4 个文件扁平列表扩展为完整模块树，包括 `features/`、`ui/chat/`、`domain/`、`infra/` 各层新模块，标注各模块职责。
+
+### Task 9.5 — 发布说明
+
+更新 `release/release-notes.md`，前置 v0.8.0 发布说明，聚焦用户可感知变化：
+
+- 体验改进（状态可见、上下文透明、思考/回答分离、工具卡片）
+- 视觉精修（焦点环、无障碍标签、动画去噪）
+- 诊断与恢复（设置页诊断、重新检测按钮、配额警告）
+- 行为说明（思考块独立展示、工具卡片自动折叠、配额警告去重）
+
+### Task 9.6 — 发布前三类环境验收框架
+
+已集成在 `docs/refactor/manual-regression-checklist.md` 末尾，包含深色/浅色/窄侧栏三类环境的标准化检查点和最终结论复选框。
+
+### Task 9.7 — 最终验证
+
+- `npm run test:run`：**22 文件 / 123 测试** 全部通过 ✅（新增 8 条：toolCallMapper 边界 × 4 + messageListView 边界 × 4）
+- `npm run build`：TypeScript 无错误，esbuild 构建干净 ✅
+- 新增文档：manual-regression-checklist.md（36 条场景 + 三类环境验收）
+- 更新文档：README.md（v0.8.0 变更日志）、CHEATSHEET.md（模块结构）、release/release-notes.md（v0.8.0）
+
+### 发布前版本号修正
+
+全量检查发现版本号不一致（`package.json` 停留在 v0.7.3，未随历次发布同步），统一修正：
+
+| 文件 | 修正前 | 修正后 |
+|------|--------|--------|
+| `manifest.json` | 0.7.9 | **0.8.0** |
+| `package.json` | 0.7.3 | **0.8.0** |
+| `release/manifest.json` | 0.7.8 | **0.8.0** |
+| `versions.json` | 最高 0.7.9 | 追加 0.8.0 条目 |
+
+修正后构建验证：`iflow-for-obsidian@0.8.0 build` 干净通过，22 文件 / 123 测试全部通过 ✅
+

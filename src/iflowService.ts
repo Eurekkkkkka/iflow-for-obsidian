@@ -5,8 +5,22 @@ import { mapSessionUpdateToEvents } from './features/chat/toolCallMapper';
 import { composePrompt } from './features/chat/promptComposer';
 import { VaultFileBridge } from './infra/obsidian/vaultFileBridge';
 
+// Import Node.js modules for process management (Electron environment)
+declare const require: (module: string) => any;
+const { spawn } = require('child_process');
+const path = require('path');
+
+// Terminal session tracking
+interface TerminalSession {
+	id: string;
+	process: any;
+	output: string;
+	exitCode: number | null;
+	completed: boolean;
+}
+
 export interface IFlowMessage {
-	type: 'stream' | 'tool' | 'question' | 'plan' | 'error' | 'end';
+	type: 'stream' | 'thought' | 'tool' | 'question' | 'plan' | 'error' | 'end';
 	content?: string;
 	data?: any;
 }
@@ -26,14 +40,12 @@ export interface SendMessageOptions {
 	filePath?: string;
 	fileContent?: string;
 	selection?: string;
-	model?: string;
-	mode?: string;
-	thinkingEnabled?: boolean;
 	images?: Array<{
 		mediaType: string;
 		data: string;  // base64
 	}>;
 	onChunk?: (chunk: string) => void;
+	onThought?: (chunk: string) => void;
 	onTool?: (tool: IFlowToolCall) => void;
 	onEnd?: () => void;
 	onError?: (error: string) => void;
@@ -104,6 +116,13 @@ export class IFlowService {
 					readTextFile: true,
 					writeTextFile: true,
 				},
+				terminal: {
+					create: true,
+					output: true,
+					waitForExit: true,
+					kill: true,
+					release: true,
+				},
 			},
 		}) as { isAuthenticated?: boolean };
 
@@ -152,6 +171,8 @@ export class IFlowService {
 		this.registerServerHandlers();
 	}
 
+	private terminalSessions = new Map<string, TerminalSession>();
+
 	private registerServerHandlers(): void {
 		if (!this.protocol) return;
 		const bridge = new VaultFileBridge(this.app.vault.adapter, this.getVaultPath());
@@ -195,6 +216,178 @@ export class IFlowService {
 				console.error('[iFlow] fs/write_text_file error:', result.error);
 			}
 			return result;
+		});
+
+		// Terminal: create a new terminal session and execute command
+		this.protocol.onServerMethod('terminal/create', async (_id: number, params: any) => {
+			console.log('[iFlow] terminal/create:', params);
+			const terminalId = `terminal-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+			const command = params?.command || '';
+			const cwd = params?.cwd || this.getVaultPath();
+			const env = params?.env || process.env;
+
+			return new Promise((resolve) => {
+				try {
+					// Determine shell based on platform
+					const isWindows = process.platform === 'win32';
+					const shell = isWindows ? 'powershell.exe' : '/bin/bash';
+					const shellArgs = isWindows 
+						? ['-NoProfile', '-Command', command]
+						: ['-c', command];
+
+					const childProcess = spawn(shell, shellArgs, {
+						cwd,
+						env: { ...process.env, ...env },
+						shell: false,
+						windowsHide: true,
+					});
+
+					const session: TerminalSession = {
+						id: terminalId,
+						process: childProcess,
+						output: '',
+						exitCode: null,
+						completed: false,
+					};
+
+					// Capture stdout
+					childProcess.stdout?.on('data', (data: Buffer) => {
+						session.output += data.toString();
+					});
+
+					// Capture stderr
+					childProcess.stderr?.on('data', (data: Buffer) => {
+						session.output += data.toString();
+					});
+
+					// Handle process completion
+					childProcess.on('close', (code: number) => {
+						session.exitCode = code;
+						session.completed = true;
+						console.log(`[iFlow] Terminal ${terminalId} exited with code ${code}`);
+					});
+
+					childProcess.on('error', (err: Error) => {
+						session.output += `Error: ${err.message}\n`;
+						session.exitCode = 1;
+						session.completed = true;
+					});
+
+					this.terminalSessions.set(terminalId, session);
+					console.log(`[iFlow] Terminal created: ${terminalId}`);
+
+					resolve({ id: terminalId });
+				} catch (error) {
+					console.error('[iFlow] terminal/create error:', error);
+					resolve({ error: String(error) });
+				}
+			});
+		});
+
+		// Terminal: get output from a terminal session
+		this.protocol.onServerMethod('terminal/output', async (_id: number, params: any) => {
+			console.log('[iFlow] terminal/output:', params);
+			const terminalId = params?.id;
+			if (!terminalId) {
+				return { error: 'Terminal ID is required' };
+			}
+
+			const session = this.terminalSessions.get(terminalId);
+			if (!session) {
+				return { error: `Terminal session not found: ${terminalId}` };
+			}
+
+			return {
+				output: session.output,
+				exitCode: session.exitCode,
+				completed: session.completed,
+			};
+		});
+
+		// Terminal: wait for command to complete
+		this.protocol.onServerMethod('terminal/wait_for_exit', async (_id: number, params: any) => {
+			console.log('[iFlow] terminal/wait_for_exit:', params);
+			const terminalId = params?.id;
+			const timeout = params?.timeout || 60000; // Default 60 seconds
+
+			if (!terminalId) {
+				return { error: 'Terminal ID is required' };
+			}
+
+			const session = this.terminalSessions.get(terminalId);
+			if (!session) {
+				return { error: `Terminal session not found: ${terminalId}` };
+			}
+
+			return new Promise((resolve) => {
+				if (session.completed) {
+					resolve({
+						exitCode: session.exitCode,
+						output: session.output,
+					});
+					return;
+				}
+
+				const startTime = Date.now();
+				const checkInterval = setInterval(() => {
+					if (session.completed) {
+						clearInterval(checkInterval);
+						resolve({
+							exitCode: session.exitCode,
+							output: session.output,
+						});
+					} else if (Date.now() - startTime > timeout) {
+						clearInterval(checkInterval);
+						resolve({
+							error: 'Timeout waiting for command to complete',
+							output: session.output,
+							timedOut: true,
+						});
+					}
+				}, 100);
+			});
+		});
+
+		// Terminal: kill a running command
+		this.protocol.onServerMethod('terminal/kill', async (_id: number, params: any) => {
+			console.log('[iFlow] terminal/kill:', params);
+			const terminalId = params?.id;
+
+			if (!terminalId) {
+				return { error: 'Terminal ID is required' };
+			}
+
+			const session = this.terminalSessions.get(terminalId);
+			if (!session) {
+				return { error: `Terminal session not found: ${terminalId}` };
+			}
+
+			if (!session.completed && session.process) {
+				session.process.kill();
+				session.completed = true;
+				session.exitCode = -1;
+				return { killed: true };
+			}
+
+			return { killed: false, message: 'Process already completed' };
+		});
+
+		// Terminal: release terminal resources
+		this.protocol.onServerMethod('terminal/release', async (_id: number, params: any) => {
+			console.log('[iFlow] terminal/release:', params);
+			const terminalId = params?.id;
+
+			if (!terminalId) {
+				return { error: 'Terminal ID is required' };
+			}
+
+			const session = this.terminalSessions.get(terminalId);
+			if (session && !session.completed && session.process) {
+				session.process.kill();
+			}
+
+			this.terminalSessions.delete(terminalId);
+			return { released: true };
 		});
 	}
 
@@ -255,46 +448,7 @@ export class IFlowService {
 			await this.connect();
 		}
 
-		// Apply runtime settings (mode, model, thinking) before sending prompt
-		if (options.mode) {
-			try {
-				await this.protocol.sendRequest('session/set_mode', {
-					sessionId: this.sessionId,
-					modeId: options.mode,
-				});
-				console.log(`[iFlow] Mode set to: ${options.mode}`);
-			} catch (error) {
-				console.warn(`[iFlow] Failed to set mode: ${error}`);
-			}
-		}
-
-		if (options.model) {
-			try {
-				await this.protocol.sendRequest('session/set_model', {
-					sessionId: this.sessionId,
-					modelId: options.model,
-				});
-				console.log(`[iFlow] Model set to: ${options.model}`);
-			} catch (error) {
-				console.warn(`[iFlow] Failed to set model: ${error}`);
-			}
-		}
-
-		if (options.thinkingEnabled !== undefined) {
-			try {
-				const thinkPayload: any = {
-					sessionId: this.sessionId,
-					thinkEnabled: options.thinkingEnabled,
-				};
-				if (options.thinkingEnabled) {
-					thinkPayload.thinkConfig = 'think';
-				}
-				await this.protocol.sendRequest('session/set_think', thinkPayload);
-				console.log(`[iFlow] Thinking set to: ${options.thinkingEnabled}`);
-			} catch (error) {
-				console.warn(`[iFlow] Failed to set thinking: ${error}`);
-			}
-		}
+		// Apply runtime settings before sending prompt
 
 		const prompt = options.promptOverride ?? composePrompt({
 			userMessage: options.content,
@@ -307,6 +461,7 @@ export class IFlowService {
 
 		// Register handlers for this message
 		if (options.onChunk) this.on('stream', options.onChunk);
+		if (options.onThought) this.on('thought', options.onThought);
 		if (options.onTool) this.on('tool', options.onTool);
 		if (options.onEnd) this.on('end', () => {
 			options.onEnd?.();

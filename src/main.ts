@@ -5,6 +5,7 @@ import { initI18n, t } from './i18n';
 import { bootstrap, type PluginRuntime } from './app/pluginBootstrap';
 import { shouldCollapseView } from './app/viewUtils';
 import { resolveWindowsIflowLaunch } from './app/windowsIflowLauncher';
+import { buildDiagnosticsReport } from './ui/chat/diagnosticsReport';
 
 // Import Node.js modules for process management (Electron environment)
 declare const require: (module: string) => any;
@@ -21,9 +22,6 @@ interface IFlowSettings {
 	excludedTags: string[];
 	language: string;
 	autoAttachFile: boolean;
-	lastUsedModel: string;
-	lastUsedMode: string;
-	lastUsedThinking: boolean;
 	autoStartSdk: boolean;  // Auto-start iFlow SDK on plugin load
 }
 
@@ -34,9 +32,6 @@ const DEFAULT_SETTINGS: IFlowSettings = {
 	excludedTags: ['private', 'sensitive'],
 	language: 'zh-CN',
 	autoAttachFile: true,
-	lastUsedModel: 'glm-4.7',
-	lastUsedMode: 'default',
-	lastUsedThinking: false,
 	autoStartSdk: true,  // Enabled by default
 }
 
@@ -271,6 +266,9 @@ class IFlowSettingTab extends PluginSettingTab {
 
 		const settings = t().settings;
 
+		// ── 语言 ──────────────────────────────────────────
+		containerEl.createEl('h3', { text: '界面与语言' });
+
 		// Language setting
 		new Setting(containerEl)
 			.setName(settings.language)
@@ -287,10 +285,13 @@ class IFlowSettingTab extends PluginSettingTab {
 					this.display();
 				}));
 
+		// ── 连接与服务 ────────────────────────────────────
+		containerEl.createEl('h3', { text: '连接与服务' });
+
 		// Auto-start SDK setting
 		new Setting(containerEl)
 			.setName('自动启动 SDK')
-			.setDesc('插件加载时自动启动 iFlow SDK（推荐开启）')
+			.setDesc('Obsidian 加载插件时自动启动 iFlow SDK，首次安装后推荐开启')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.autoStartSdk)
 				.onChange(async (value) => {
@@ -298,23 +299,34 @@ class IFlowSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		// Manual SDK restart button
+		// Manual SDK restart + recheck buttons (Task 7.3)
 		new Setting(containerEl)
-			.setName('重启 SDK')
-			.setDesc('手动重启 iFlow SDK 服务')
+			.setName('SDK 操作')
+			.setDesc('重启会终止并重新启动 SDK 进程；重新检测仅验证当前端口是否可达，不会重启进程')
 			.addButton(button => button
-				.setButtonText('重启')
+				.setButtonText('重启 SDK')
 				.onClick(async () => {
 					button.setButtonText('启动中...');
 					button.setDisabled(true);
 					const success = await this.plugin.startSdk();
-					button.setButtonText('重启');
+					button.setButtonText('重启 SDK');
 					button.setDisabled(false);
 					if (success) {
 						new Notice('SDK 重启成功！');
-						// Refresh status
 						this.display();
+					} else {
+						new Notice('SDK 重启失败，请确认 iflow CLI 已安装并在 PATH 中');
 					}
+				}))
+			.addButton(button => button
+				.setButtonText('重新检测')
+				.onClick(async () => {
+					button.setButtonText('检测中...');
+					button.setDisabled(true);
+					const connected = await this.plugin.iflowService.checkConnection();
+					button.setButtonText('重新检测');
+					button.setDisabled(false);
+					new Notice(connected ? '✓ SDK 连接正常' : '✗ SDK 未响应，请尝试重启');
 				}));
 
 		new Setting(containerEl)
@@ -343,6 +355,9 @@ class IFlowSettingTab extends PluginSettingTab {
 					}
 				}));
 
+		// ── 上下文与附件 ──────────────────────────────────
+		containerEl.createEl('h3', { text: '上下文与附件' });
+
 		new Setting(containerEl)
 			.setName(settings.autoScroll)
 			.setDesc(settings.autoScrollDesc)
@@ -353,9 +368,10 @@ class IFlowSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
+		// Task 7.4: Improved description for autoAttachFile
 		new Setting(containerEl)
 			.setName(settings.autoAttachFile)
-			.setDesc(settings.autoAttachFileDesc)
+			.setDesc('发送消息时自动将当前编辑器中打开的笔记作为上下文附件发送，让模型了解你正在查看的内容')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.autoAttachFile)
 				.onChange(async (value) => {
@@ -363,9 +379,10 @@ class IFlowSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
+		// Task 7.4: Improved description for excludedTags
 		new Setting(containerEl)
 			.setName(settings.excludedTags)
-			.setDesc(settings.excludedTagsDesc)
+			.setDesc('带有这些标签的笔记不会被自动附加（用英文逗号分隔，如 private, sensitive）。已通过自动附件功能手动添加的文件不受此规则影响')
 			.addText(text => text
 				.setValue(this.plugin.settings.excludedTags.join(', '))
 				.onChange(async (value) => {
@@ -376,22 +393,44 @@ class IFlowSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
+		// ── 诊断与状态 ────────────────────────────────────
+		// Task 7.2: Runtime diagnostics entry
+		containerEl.createEl('h3', { text: '诊断与状态' });
+
+		const diagnosticsEl = containerEl.createEl('div', { cls: 'iflow-diagnostics' });
+		diagnosticsEl.createEl('p', { text: '正在检测连接状态…', cls: 'iflow-diagnostics-text' });
+
+		this.plugin.iflowService.checkConnection().then(connected => {
+			const storageSize = (() => {
+				try {
+					let total = 0;
+					for (const key of Object.keys(localStorage)) {
+						if (key.startsWith('iflow-conversations-')) {
+							total += localStorage.getItem(key)?.length ?? 0;
+						}
+					}
+					return total;
+				} catch { return 0; }
+			})();
+
+			const report = buildDiagnosticsReport({
+				connectionState: connected ? 'connected' : 'disconnected',
+				lastError: null,
+				usedBytes: storageSize,
+				totalBytes: 4 * 1024 * 1024,
+				port: this.plugin.settings.iflowPort,
+			});
+
+			diagnosticsEl.empty();
+			report.split('\n').forEach(line => {
+				diagnosticsEl.createEl('p', { text: line, cls: 'iflow-diagnostics-line' });
+			});
+		});
+
 		// Add info about iFlow CLI
 		containerEl.createEl('h3', { text: settings.cliRequirements });
 		containerEl.createEl('p', {
 			text: settings.cliRequirementsDesc
-		});
-
-		// Connection status
-		const statusDiv = containerEl.createEl('div', { cls: 'iflow-status' });
-		statusDiv.createEl('p', { text: settings.connectionStatus });
-		const statusText = statusDiv.createEl('span', { cls: 'iflow-status-text' });
-		statusText.textContent = settings.checking;
-
-		// Check connection
-		this.plugin.iflowService.checkConnection().then(connected => {
-			statusText.textContent = connected ? settings.connected : settings.disconnected;
-			statusText.className = 'iflow-status-text ' + (connected ? 'connected' : 'disconnected');
 		});
 	}
 }

@@ -61,11 +61,33 @@ gh release create v0.x.x main.js manifest.json styles.css \
 
 ```
 src/
-├── main.ts              # 插件入口、设置管理
-├── chatView.ts          # 聊天 UI、消息处理 ⭐核心
-├── iflowService.ts      # WebSocket 通信 ⭐核心
-├── conversationStore.ts # 会话存储
-└── styles.css           # 样式文件
+├── main.ts                          # 插件入口、设置管理（含诊断、配额警告）
+├── chatView.ts                      # 聊天 UI 装配层 ⭐核心
+├── iflowService.ts                  # WebSocket 通信 ⭐核心
+├── conversationStore.ts             # 会话存储（委托至 storageQuotaPolicy）
+├── styles.css                       # 全局样式文件
+├── features/
+│   └── chat/
+│       └── toolCallMapper.ts        # 事件映射：thought/stream/tool/end 路由
+├── ui/
+│   └── chat/
+│       ├── messageRenderer.ts       # 消息 HTML 渲染（代码块、表格、列表、思考块）
+│       ├── messageListView.ts       # 消息列表 DOM 管理（含思考流展示）
+│       ├── conversationSelectorView.ts  # 会话列表筛选/分组/格式化
+│       ├── imageAttachmentView.ts   # 图片附件 UI
+│       ├── topBarConfigView.ts      # 顶部栏摘要文本构建
+│       ├── inputState.ts            # 输入区状态解析
+│       ├── scrollPositionStore.ts   # 滚动位置记忆
+│       └── ariaButtonLabels.ts      # 按钮无障碍标签映射
+├── domain/
+│   └── conversation/
+│       └── storageQuotaPolicy.ts    # 存储配额策略与清理逻辑
+└── infra/
+    └── obsidian/
+        ├── canvasFileAdapter.ts     # Canvas 文件检测与格式化
+        └── vaultPathResolver.ts     # Vault 路径转换
+
+tests/                               # 22 个测试文件，123 个测试
 ```
 
 ---

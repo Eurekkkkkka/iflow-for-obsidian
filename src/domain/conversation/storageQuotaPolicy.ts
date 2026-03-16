@@ -51,3 +51,13 @@ export function cleanupOldConversations<T extends HasUpdatedAt>(
 		removedCount,
 	};
 }
+
+export function buildQuotaWarningMessage(info: StorageQuotaInfo): string | null {
+	if (info.atLimit) {
+		return `存储空间已达上限（${(info.percentUsed * 100).toFixed(0)}%），请清理旧会话以继续使用。`;
+	}
+	if (info.approachingLimit) {
+		return `存储空间接近上限（${(info.percentUsed * 100).toFixed(0)}%），建议清理旧会话。`;
+	}
+	return null;
+}

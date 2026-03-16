@@ -77,4 +77,32 @@ export class MessageListView {
 			this.appendMessage(msg.role, msg.content, msg.id);
 		}
 	}
+
+	showThought(messageId: string, content: string): void {
+		const messageEl = this.container.querySelector(`[data-id="${messageId}"]`);
+		if (!messageEl) return;
+		let thoughtBlock = messageEl.querySelector('.iflow-thought-block') as HTMLElement | null;
+		if (!thoughtBlock) {
+			thoughtBlock = (messageEl as any).createDiv({ cls: 'iflow-thought-block' }) as HTMLElement;
+			const toggle = (thoughtBlock as any).createDiv({ cls: 'iflow-thought-toggle' });
+			toggle.innerHTML = '▶ 思考过程';
+			(thoughtBlock as any).createDiv({ cls: 'iflow-thought-content' });
+		}
+		const contentEl = messageEl.querySelector('.iflow-thought-content') as HTMLElement | null;
+		if (contentEl) contentEl.innerHTML = content;
+	}
+
+	updateThought(messageId: string, content: string): void {
+		const messageEl = this.container.querySelector(`[data-id="${messageId}"]`);
+		if (!messageEl) return;
+		const contentEl = messageEl.querySelector('.iflow-thought-content') as HTMLElement | null;
+		if (contentEl) contentEl.innerHTML = content;
+	}
+
+	finalizeThought(messageId: string): void {
+		const messageEl = this.container.querySelector(`[data-id="${messageId}"]`);
+		if (!messageEl) return;
+		const thoughtBlock = messageEl.querySelector('.iflow-thought-block') as HTMLElement | null;
+		if (thoughtBlock) thoughtBlock.classList.add('iflow-thought-collapsed');
+	}
 }

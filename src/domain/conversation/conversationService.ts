@@ -1,12 +1,10 @@
 import type {
 	Conversation,
-	ConversationMode,
 	ConversationState,
 	Message,
-	ModelType,
 } from '../../conversationStore';
-import { cleanupOldConversations } from './storageQuotaPolicy';
-import type { ConversationRepository } from './conversationRepository';
+import { cleanupOldConversations, type StorageQuotaInfo } from './storageQuotaPolicy';
+import type { ConversationRepository, LocalStorageConversationRepository } from './conversationRepository';
 
 export class ConversationService {
 	constructor(private readonly repository: ConversationRepository) {}
@@ -23,16 +21,15 @@ export class ConversationService {
 		return state.conversations.find((c) => c.id === state.currentConversationId) || null;
 	}
 
-	newConversation(defaultModel: ModelType = 'glm-4.7', defaultMode: ConversationMode = 'default', defaultThink: boolean = false): Conversation {
+	newConversation(): Conversation {
 		const state = this.repository.getState();
-		const current = this.getCurrentConversation();
 		const conversation: Conversation = {
 			id: `conv-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`,
 			title: 'New Conversation',
 			messages: [],
-			mode: current?.mode ?? defaultMode,
-			think: current?.think ?? defaultThink,
-			model: current?.model ?? defaultModel,
+			mode: 'default',
+			think: false,
+			model: 'glm-4.7',
 			createdAt: Date.now(),
 			updatedAt: Date.now(),
 		};
@@ -135,6 +132,14 @@ export class ConversationService {
 
 	subscribe(listener: () => void): () => void {
 		return this.repository.subscribe(listener);
+	}
+
+	getStorageQuota(): StorageQuotaInfo | null {
+		const repo = this.repository as Partial<LocalStorageConversationRepository>;
+		if (typeof repo.getStorageQuota === 'function') {
+			return repo.getStorageQuota();
+		}
+		return null;
 	}
 
 	private generateTitle(firstMessage: string): string {

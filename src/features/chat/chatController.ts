@@ -8,9 +8,6 @@ export interface ChatControllerContext {
 
 export interface ChatControllerSendInput {
 	content: string;
-	model?: string;
-	mode?: string;
-	thinkingEnabled?: boolean;
 	onChunk?: (chunk: string) => void;
 	onTool?: (tool: IFlowToolCall) => void;
 	onEnd?: () => void;
@@ -39,9 +36,6 @@ export class ChatController {
 			filePath: context.filePath,
 			fileContent: context.fileContent,
 			selection: context.selection,
-			model: input.model,
-			mode: input.mode,
-			thinkingEnabled: input.thinkingEnabled,
 			onChunk: input.onChunk,
 			onTool: input.onTool,
 			onEnd: input.onEnd,

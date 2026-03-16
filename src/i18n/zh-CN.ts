@@ -3,44 +3,9 @@
  * 中文简体语言包
  */
 export const zhCN = {
-	// Model names (keep original as they are model IDs)
-	models: {
-		'glm-4.7': 'GLM-4.7',
-		'glm-5': 'GLM-5',
-		'deepseek-v3.2-chat': 'DeepSeek-V3.2',
-		'iFlow-ROME-30BA3B': 'iFlow-ROME-30BA3B(预览版)',
-		'qwen3-coder-plus': 'Qwen3-Coder-Plus',
-		'kimi-k2-thinking': 'Kimi-K2-Thinking',
-		'minimax-m2.5': 'MiniMax-M2.5',
-		'minimax-m2.1': 'MiniMax-M2.1',
-		'kimi-k2-0905': 'Kimi-K2-0905',
-		'kimi-k2.5': 'Kimi-K2.5',
-	},
-
-	// Mode names
-	modes: {
-		default: {
-			name: '普通',
-			icon: '⚡'
-		},
-		yolo: {
-			name: '极速',
-			icon: '🚀'
-		},
-		smart: {
-			name: '智能',
-			icon: '🧠'
-		},
-		plan: {
-			name: '规划',
-			icon: '📋'
-		},
-	},
-
 	// UI Labels
 	ui: {
 		send: '发送',
-		thinking: '思考',
 		newConversation: '新对话',
 		today: '今天',
 		yesterday: '昨天',
@@ -48,6 +13,8 @@ export const zhCN = {
 		older: '更早',
 		messages: '条消息',
 		noMessages: '0 条消息',
+		clearSearch: '清空搜索',
+		startNewConversation: '新建对话',
 		noConversations: '暂无对话',
 		noConversationsFound: '未找到对话',
 		searchConversations: '搜索对话...',
@@ -88,10 +55,30 @@ export const zhCN = {
 		assistant: 'iFlow',
 	},
 
+	// Runtime status
+	status: {
+		detecting: '检测中',
+		connected: '已连接',
+		starting: '启动中',
+		startFailed: '启动失败',
+		authFailed: '认证失败',
+		sending: '发送中',
+		completed: '已完成',
+		timedOut: '已超时',
+		reconnecting: '重连中',
+		disconnected: '未连接',
+	},
+
 	// Errors
 	errors: {
 		streamingTimeout: '流式传输超时',
 		connectionFailed: '连接失败',
+		sendFailed: '发送失败，请重试',
+		sdkNotInstalled: '未检测到 iFlow CLI，请运行: npm install -g @iflow-ai/iflow-cli@latest',
+		sdkAuthFailed: 'iFlow CLI 认证失败，请检查账号状态',
+		sdkPortBusy: '端口 {port} 被占用，请在设置中修改端口后重试',
+		sdkStartTimeout: 'iFlow CLI 启动超时，请手动运行 iflow 后重试',
+		genericHint: '如仍无法解决，请重启 Obsidian 或检查日志',
 	},
 
 	// Settings page
@@ -135,6 +122,10 @@ export const zhCN = {
 	context: {
 		file: '📄 ',
 		attached: '已附加: ',
+		autoLabel: '自动',
+		manualLabel: '手动',
+		removeContext: '移除',
+		selectionLabel: '选中文本',
 	},
 };
 

@@ -1,16 +1,16 @@
 import type { IFlowMessage, IFlowToolCall } from '../../iflowService';
 
+/** Extract plain text from a text-typed content object. */
+function extractText(content: any): string | null {
+	if (!content || typeof content !== 'object') return null;
+	if (content.type === 'text' && typeof content.text === 'string') return content.text;
+	if (typeof content.text === 'string') return content.text;
+	return null;
+}
+
 export function extractTextFromUpdate(update: any): string | null {
-	if (update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'agent_thought_chunk') {
-		const content = update.content;
-		if (content && typeof content === 'object') {
-			if (content.type === 'text' && typeof content.text === 'string') {
-				return content.text;
-			}
-			if (typeof content.text === 'string') {
-				return content.text;
-			}
-		}
+	if (update.sessionUpdate === 'agent_message_chunk') {
+		return extractText(update.content);
 	}
 
 	if (typeof update === 'string') return update;
@@ -26,6 +26,15 @@ export function mapSessionUpdateToEvents(update: any): IFlowMessage[] {
 	const events: IFlowMessage[] = [];
 	if (!update || typeof update !== 'object') {
 		return events;
+	}
+
+	// ── Phase 4.2: thought chunk maps to 'thought', NOT 'stream' ──────────
+	if (update.sessionUpdate === 'agent_thought_chunk') {
+		const text = extractText(update.content);
+		if (text) {
+			events.push({ type: 'thought', content: text });
+		}
+		return events; // thought events never trigger end — return early
 	}
 
 	const content = update.content;

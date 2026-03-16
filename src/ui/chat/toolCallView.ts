@@ -64,5 +64,10 @@ export class ToolCallView {
 				}
 			}
 		}
+
+		// Auto-collapse completed tool calls to keep the message area clean
+		if (tool.status === 'completed') {
+			toolContainer.classList.add('iflow-tool-completed');
+		}
 	}
 }

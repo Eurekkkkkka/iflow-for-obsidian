@@ -4,6 +4,7 @@ import type {
 	ConversationMode,
 	ModelType,
 } from '../../conversationStore';
+import { calculateStorageQuotaInfo, type StorageQuotaInfo } from './storageQuotaPolicy';
 
 export interface ConversationRepository {
 	getState(): ConversationState;
@@ -107,6 +108,15 @@ export class LocalStorageConversationRepository implements ConversationRepositor
 			this.storage.setItem(this.storageKey, JSON.stringify(persisted));
 		} catch (error) {
 			console.error('[ConversationRepository] Failed to save:', error);
+		}
+	}
+
+	getStorageQuota(): StorageQuotaInfo {
+		try {
+			const data = this.storage.getItem(this.storageKey);
+			return calculateStorageQuotaInfo(data);
+		} catch {
+			return calculateStorageQuotaInfo(null);
 		}
 	}
 

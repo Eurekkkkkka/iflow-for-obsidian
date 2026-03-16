@@ -9,6 +9,10 @@ import { ToolCallView } from './ui/chat/toolCallView';
 import { type ImageMediaType, type ImageAttachment, MAX_IMAGE_SIZE, getImageMediaType, isSupportedImageFile, generateImageAttachmentId, truncateImageName, formatImageSize } from './ui/chat/imageAttachmentView';
 import { ConversationService } from './domain/conversation/conversationService';
 import { LocalStorageConversationRepository } from './domain/conversation/conversationRepository';
+import { resolveInputState } from './ui/chat/inputState';
+import { ScrollPositionStore } from './ui/chat/scrollPositionStore';
+import { buildQuotaWarningMessage } from './domain/conversation/storageQuotaPolicy';
+import { getButtonAriaLabel } from './ui/chat/ariaButtonLabels';
 
 export const VIEW_TYPE_IFLOW_CHAT = 'iflow-chat-view';
 
@@ -22,16 +26,10 @@ export class IFlowChatView extends ItemView {
 	private toolCallView!: ToolCallView;
 	private messages: { role: string; content: string; id: string }[] = [];
 	private currentMessage = '';
+	private currentThought = '';
 	private isStreaming = false;
 
-	// Settings - will be loaded from plugin settings
-	private currentModel: string;
-	private currentMode: string;
-	private thinkingEnabled: boolean;
 
-	// Available models and modes from iFlow CLI
-	private availableModels: any[] = [];
-	private availableModes: any[] = [];
 
 	// Conversation management
 	private currentConversationId: string | null = null;
@@ -52,16 +50,15 @@ export class IFlowChatView extends ItemView {
 	private messagesContainer!: HTMLElement;
 	private textarea!: HTMLTextAreaElement;
 	private contextIndicator!: HTMLElement;
+	private connectionStatusEl: HTMLElement | null = null;
+	private connectionCheckTimer: ReturnType<typeof setInterval> | null = null;
+	private sendButton: HTMLButtonElement | null = null;
+	private scrollPositionStore = new ScrollPositionStore();
 
 	constructor(leaf: WorkspaceLeaf, plugin: IFlowPlugin, iflowService: IFlowService) {
 		super(leaf);
 		this.plugin = plugin;
 		this.iflowService = iflowService;
-
-		// Load user preferences from settings
-		this.currentModel = plugin.settings.lastUsedModel || 'glm-4.7';
-		this.currentMode = plugin.settings.lastUsedMode || 'default';
-		this.thinkingEnabled = plugin.settings.lastUsedThinking || false;
 
 		// Initialize i18n
 		initI18n();
@@ -99,16 +96,9 @@ export class IFlowChatView extends ItemView {
 		const topBar = chatContainer.createDiv({ cls: 'iflow-top-bar' });
 		this.createConversationSelector(topBar);
 
-		// Control bar (model + mode selectors) - moved to top
-		const controlBar = chatContainer.createDiv({ cls: 'iflow-control-bar' });
-		
-		// Left side: Model selector
-		const modelSelector = this.createModelSelector(controlBar);
-
-		// Right side: Mode selector and thinking toggle
-		const rightControls = controlBar.createDiv({ cls: 'iflow-control-right' });
-		const modeSelector = this.createModeSelector(rightControls);
-		const thinkingToggle = this.createThinkingToggle(rightControls);
+		// Connection status bar (Task 2.3)
+		this.connectionStatusEl = chatContainer.createDiv({ cls: 'iflow-connection-status iflow-status-detecting' });
+		this.renderConnectionStatus('detecting');
 
 		// Add context area (image preview + file indicator)
 		const contextArea = chatContainer.createDiv({ cls: 'iflow-context-area' });
@@ -149,11 +139,13 @@ export class IFlowChatView extends ItemView {
 		});
 		this.textarea = textarea;
 
-		// Send button
+		// Send button (round icon)
 		const sendButton = inputWrapper.createEl('button', {
 			cls: 'iflow-send-button',
-			text: t().ui.send,
+			text: '↑',
+			attr: { 'aria-label': t().ui.send },
 		});
+		this.sendButton = sendButton as unknown as HTMLButtonElement;
 		sendButton.onclick = () => this.sendMessage();
 
 		// Handle enter key
@@ -163,6 +155,9 @@ export class IFlowChatView extends ItemView {
 				this.sendMessage();
 			}
 		});
+
+		// Update send button state whenever textarea content changes
+		textarea.addEventListener('input', () => this.updateInputState());
 
 		// Setup drag/drop for images
 		this.setupImageDropAndPaste(inputWrapper);
@@ -175,6 +170,9 @@ export class IFlowChatView extends ItemView {
 
 		// Initialize conversation - load existing or create new
 		this.initializeConversation();
+
+		// Start connection status polling (Task 2.3)
+		this.startConnectionStatusPolling();
 	}
 
 	private initializeConversation(): void {
@@ -191,7 +189,10 @@ export class IFlowChatView extends ItemView {
 	}
 
 	async onClose() {
-		// Cleanup
+		if (this.connectionCheckTimer !== null) {
+			clearInterval(this.connectionCheckTimer);
+			this.connectionCheckTimer = null;
+		}
 	}
 
 	private updateContext() {
@@ -216,7 +217,11 @@ export class IFlowChatView extends ItemView {
 			const fileSpan = this.contextIndicator.createSpan({ cls: 'iflow-context-file' });
 			fileSpan.textContent = `${t().context.attached}${fileToShow.path}`;
 			
-			const removeBtn = this.contextIndicator.createSpan({ cls: 'iflow-context-remove', text: '×' });
+			const removeBtn = this.contextIndicator.createSpan({
+				cls: 'iflow-context-remove',
+				text: '×',
+				attr: { 'role': 'button', 'aria-label': getButtonAriaLabel('contextRemove'), 'tabindex': '0' },
+			});
 			removeBtn.onclick = () => {
 				this.attachedFile = null;
 				this.currentFile = null;
@@ -394,6 +399,16 @@ export class IFlowChatView extends ItemView {
 		for (const [id, image] of this.attachedImages) {
 			this.renderImagePreview(id, image);
 		}
+
+		// Task 6.5: Bulk clear button when more than 1 image attached
+		if (this.attachedImages.size > 1) {
+			const clearAllBtn = this.imagePreviewEl.createDiv({ cls: 'iflow-image-clear-all' });
+			clearAllBtn.textContent = `清空全部 (${this.attachedImages.size})`;
+			clearAllBtn.onclick = () => {
+				this.attachedImages.clear();
+				this.updateImagePreview();
+			};
+		}
 	}
 
 	private renderImagePreview(id: string, image: ImageAttachment) {
@@ -411,7 +426,11 @@ export class IFlowChatView extends ItemView {
 		info.createSpan({ cls: 'iflow-image-name', text: this.truncateName(image.name, 15) });
 		info.createSpan({ cls: 'iflow-image-size', text: this.formatSize(image.size) });
 
-		const remove = chip.createSpan({ cls: 'iflow-image-remove', text: '×' });
+		const remove = chip.createSpan({
+			cls: 'iflow-image-remove',
+			text: '×',
+			attr: { 'role': 'button', 'aria-label': getButtonAriaLabel('imageRemove'), 'tabindex': '0' },
+		});
 		remove.onclick = () => {
 			this.attachedImages.delete(id);
 			this.updateImagePreview();
@@ -431,7 +450,11 @@ export class IFlowChatView extends ItemView {
 			},
 		});
 
-		const closeBtn = modal.createDiv({ cls: 'iflow-image-modal-close', text: '×' });
+		const closeBtn = modal.createDiv({
+			cls: 'iflow-image-modal-close',
+			text: '×',
+			attr: { 'role': 'button', 'aria-label': getButtonAriaLabel('modalClose'), 'tabindex': '0' },
+		});
 
 		const handleEsc = (e: KeyboardEvent) => {
 			if (e.key === 'Escape') close();
@@ -531,6 +554,7 @@ export class IFlowChatView extends ItemView {
 		const assistantMsgId = this.addMessage('assistant', '');
 		this.currentMessage = '';
 		this.isStreaming = true;
+		this.updateInputState(); // Task 6.2: disable send during streaming
 		
 		// Show loading animation
 		this.showLoadingAnimation(assistantMsgId);
@@ -560,8 +584,15 @@ export class IFlowChatView extends ItemView {
 				this.streamingTimeout = null;
 			}
 			this.isStreaming = false;
+			this.currentThought = '';
+			this.updateInputState();
+			// Task 7.5: Check storage quota after each response
+			this.checkAndWarnQuota();
 			console.log('[iFlow Chat] Cleanup: streaming state reset');
 		};
+
+		// Show "sending" status (Task 2.8)
+		this.renderConnectionStatus('detecting');
 
 		// Send to iFlow
 		try {
@@ -570,9 +601,13 @@ export class IFlowChatView extends ItemView {
 				filePath: activeFile?.path,
 				fileContent,
 				selection,
-				model: this.currentModel,
-				mode: this.currentMode,
-				thinkingEnabled: this.thinkingEnabled,
+				onThought: (chunk: string) => {
+					this.currentThought += chunk;
+					this.messageListView.showThought(assistantMsgId, this.currentThought);
+					if (this.plugin.settings.enableAutoScroll) {
+						this.scrollToBottom();
+					}
+				},
 				onChunk: (chunk: string) => {
 					// Hide loading on first chunk
 					if (!this.currentMessage) {
@@ -596,7 +631,11 @@ export class IFlowChatView extends ItemView {
 				},
 				onEnd: () => {
 					console.log('[iFlow Chat] onEnd called, setting isStreaming = false');
+					this.messageListView.finalizeThought(assistantMsgId);
 					cleanup();
+
+					// Restore connected status (Task 2.8)
+					this.renderConnectionStatus('connected');
 
 					// Save assistant message to conversation
 					if (this.currentConversationId && this.currentMessage) {
@@ -612,13 +651,17 @@ export class IFlowChatView extends ItemView {
 				onError: (error: string) => {
 					console.log('[iFlow Chat] onError called', error);
 					cleanup();
-					this.updateMessage(assistantMsgId, `Error: ${error}`);
+					this.renderConnectionStatus('disconnected');
+					// Task 2.9: user-facing error (avoid raw exception dump)
+					this.updateMessage(assistantMsgId, t().errors.sendFailed);
 				},
 			});
 		} catch (error) {
 			console.log('[iFlow Chat] Exception in sendMessage', error);
 			cleanup();
-			this.updateMessage(assistantMsgId, `Error: ${error.message}`);
+			this.renderConnectionStatus('disconnected');
+			// Task 2.9: user-facing error
+			this.updateMessage(assistantMsgId, t().errors.sendFailed);
 		}
 	}
 
@@ -649,6 +692,76 @@ export class IFlowChatView extends ItemView {
 
 	private scrollToBottom(): void {
 		this.messageListView.scrollToBottom();
+	}
+
+	private updateInputState(): void {
+		if (!this.sendButton) return;
+		const isEmpty = this.textarea.value.trim().length === 0;
+		const state = resolveInputState({ isStreaming: this.isStreaming, isEmpty });
+		(this.sendButton as any).disabled = state.sendDisabled;
+		this.sendButton.textContent = state.buttonLabel;
+		if (state.sendDisabled) {
+			this.sendButton.addClass('iflow-send-disabled');
+		} else {
+			this.sendButton.removeClass('iflow-send-disabled');
+		}
+	}
+
+	// Task 7.5: Quota warning — throttled to once per view lifetime
+	private quotaWarningShown = false;
+	private checkAndWarnQuota(): void {
+		if (this.quotaWarningShown) return;
+		const quota = this.conversationService.getStorageQuota();
+		if (!quota) return;
+		const msg = buildQuotaWarningMessage(quota);
+		if (msg) {
+			new Notice(msg, 6000);
+			this.quotaWarningShown = true;
+		}
+	}
+
+	// ============================================
+	// Connection Status (Task 2.3)
+	// ============================================
+
+	private renderConnectionStatus(state: 'detecting' | 'connected' | 'disconnected' | 'reconnecting'): void {
+		if (!this.connectionStatusEl) return;
+		const el = this.connectionStatusEl;
+		el.empty();
+		el.className = `iflow-connection-status iflow-status-${state}`;
+
+		const dots: Record<string, string> = {
+			detecting: '○',
+			connected: '●',
+			disconnected: '○',
+			reconnecting: '◌',
+		};
+		const labels: Record<string, string> = {
+			detecting: t().status.detecting,
+			connected: t().status.connected,
+			disconnected: t().status.disconnected,
+			reconnecting: t().status.reconnecting,
+		};
+
+		el.createSpan({ cls: 'iflow-status-dot', text: dots[state] });
+		el.createSpan({ cls: 'iflow-status-label', text: labels[state] });
+	}
+
+	private startConnectionStatusPolling(): void {
+		const check = async () => {
+			try {
+				const ok = await this.iflowService.checkConnection();
+				this.renderConnectionStatus(ok ? 'connected' : 'disconnected');
+			} catch {
+				this.renderConnectionStatus('disconnected');
+			}
+		};
+
+		// Immediate check
+		check();
+
+		// Poll every 10 s
+		this.connectionCheckTimer = setInterval(check, 10000);
 	}
 
 	// ============================================
@@ -754,186 +867,6 @@ export class IFlowChatView extends ItemView {
 		};
 	}
 
-	private createModelSelector(container: HTMLElement): HTMLElement {
-		const selector = container.createDiv({ cls: 'iflow-model-selector' });
-
-		// Full models list (matching VS Code plugin) - use i18n for names
-		const defaultModels = [
-			{ id: 'glm-4.7', name: t().models['glm-4.7'] },
-			{ id: 'glm-5', name: t().models['glm-5'] },
-			{ id: 'deepseek-v3.2-chat', name: t().models['deepseek-v3.2-chat'] },
-			{ id: 'iFlow-ROME-30BA3B', name: t().models['iFlow-ROME-30BA3B'] },
-			{ id: 'qwen3-coder-plus', name: t().models['qwen3-coder-plus'] },
-			{ id: 'kimi-k2-thinking', name: t().models['kimi-k2-thinking'] },
-			{ id: 'minimax-m2.5', name: t().models['minimax-m2.5'] },
-			{ id: 'minimax-m2.1', name: t().models['minimax-m2.1'] },
-			{ id: 'kimi-k2-0905', name: t().models['kimi-k2-0905'] },
-			{ id: 'kimi-k2.5', name: t().models['kimi-k2.5'] },
-		];
-
-		this.availableModels = defaultModels;
-
-		// Button
-		const btn = selector.createEl('button', {
-			cls: 'iflow-model-btn ready',
-		});
-
-		const currentModelObj = defaultModels.find(m => m.id === this.currentModel) || defaultModels[0];
-		const label = btn.createSpan({ cls: 'iflow-model-label', text: currentModelObj.name });
-		const chevron = btn.createDiv({ cls: 'iflow-model-chevron' });
-		chevron.innerHTML = `
-			<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-				<polyline points="6 9 12 15 18 9"></polyline>
-			</svg>
-		`;
-
-		// Dropdown
-		const dropdown = selector.createDiv({ cls: 'iflow-model-dropdown' });
-
-		this.availableModels.forEach(model => {
-			dropdown.createDiv({
-				cls: `iflow-model-option ${model.id === this.currentModel ? 'selected' : ''}`,
-				text: model.name,
-			}, (el) => {
-				el.onclick = async (e) => {
-					e.stopPropagation();
-					this.currentModel = model.id;
-					label.textContent = model.name;
-					dropdown.querySelectorAll('.iflow-model-option').forEach(opt => {
-						opt.removeClass('selected');
-					});
-					el.addClass('selected');
-					// Save user preference
-					this.plugin.settings.lastUsedModel = model.id;
-					await this.plugin.saveSettings();
-					// Close dropdown after selection
-					selector.removeClass('open');
-				};
-			});
-		});
-
-		// Click to toggle dropdown
-		btn.onclick = (e) => {
-			e.stopPropagation();
-			// Close other dropdowns first
-			document.querySelectorAll('.iflow-model-selector.open, .iflow-mode-selector.open').forEach(el => {
-				el.removeClass('open');
-			});
-			selector.toggleClass('open', !selector.hasClass('open'));
-		};
-
-		// Close dropdown when clicking outside
-		const closeHandler = (e: MouseEvent) => {
-			if (!selector.contains(e.target as Node)) {
-				selector.removeClass('open');
-			}
-		};
-		document.addEventListener('click', closeHandler);
-
-		return selector;
-	}
-
-	private createModeSelector(container: HTMLElement): HTMLElement {
-		const selector = container.createDiv({ cls: 'iflow-mode-selector' });
-
-		// Modes list (use i18n)
-		const modes = [
-			{ id: 'default', name: t().modes.default.name, icon: t().modes.default.icon },
-			{ id: 'yolo', name: t().modes.yolo.name, icon: t().modes.yolo.icon },
-			{ id: 'smart', name: t().modes.smart.name, icon: t().modes.smart.icon },
-			{ id: 'plan', name: t().modes.plan.name, icon: t().modes.plan.icon },
-		];
-
-		this.availableModes = modes;
-
-		// Trigger button (like model selector)
-		const btn = selector.createEl('button', {
-			cls: 'iflow-mode-btn',
-		});
-
-		const currentMode = modes.find(m => m.id === this.currentMode);
-		const icon = btn.createSpan({ cls: 'iflow-mode-icon', text: currentMode?.icon || t().modes.default.icon });
-		const label = btn.createSpan({ cls: 'iflow-mode-label', text: currentMode?.name || t().modes.default.name });
-		const chevron = btn.createDiv({ cls: 'iflow-mode-chevron' });
-		chevron.innerHTML = `
-			<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-				<polyline points="6 9 12 15 18 9"></polyline>
-			</svg>
-		`;
-
-		// Dropdown
-		const dropdown = selector.createDiv({ cls: 'iflow-mode-dropdown' });
-
-		modes.forEach(mode => {
-			dropdown.createDiv({
-				cls: `iflow-mode-option ${mode.id === this.currentMode ? 'selected' : ''}`,
-				attr: { 'data-mode': mode.id },
-			}, (el) => {
-				const optIcon = el.createSpan({ cls: 'iflow-mode-icon', text: mode.icon });
-				const optLabel = el.createSpan({ text: mode.name });
-				el.onclick = async (e) => {
-					e.stopPropagation();
-					this.currentMode = mode.id;
-					icon.textContent = mode.icon;
-					label.textContent = mode.name;
-					dropdown.querySelectorAll('.iflow-mode-option').forEach(opt => {
-						opt.removeClass('selected');
-					});
-					el.addClass('selected');
-					// Save user preference
-					this.plugin.settings.lastUsedMode = mode.id;
-					await this.plugin.saveSettings();
-					// Close dropdown after selection
-					selector.removeClass('open');
-				};
-			});
-		});
-
-		// Click to toggle dropdown
-		btn.onclick = (e) => {
-			e.stopPropagation();
-			// Close other dropdowns first
-			document.querySelectorAll('.iflow-model-selector.open, .iflow-mode-selector.open').forEach(el => {
-				el.removeClass('open');
-			});
-			selector.toggleClass('open', !selector.hasClass('open'));
-		};
-
-		// Close dropdown when clicking outside
-		const closeHandler = (e: MouseEvent) => {
-			if (!selector.contains(e.target as Node)) {
-				selector.removeClass('open');
-			}
-		};
-		document.addEventListener('click', closeHandler);
-
-		return selector;
-	}
-
-	private createThinkingToggle(container: HTMLElement): HTMLElement {
-		const toggle = container.createEl('button', {
-			cls: 'iflow-thinking-toggle',
-		});
-
-		// Apply saved state
-		if (this.thinkingEnabled) {
-			toggle.addClass('active');
-		}
-
-		const icon = toggle.createSpan({ cls: 'iflow-thinking-icon', text: '🧠' });
-		const label = toggle.createSpan({ text: t().ui.thinking });
-
-		toggle.onclick = async () => {
-			this.thinkingEnabled = !this.thinkingEnabled;
-			toggle.toggleClass('active', this.thinkingEnabled);
-			// Save user preference
-			this.plugin.settings.lastUsedThinking = this.thinkingEnabled;
-			await this.plugin.saveSettings();
-		};
-
-		return toggle;
-	}
-
 	// ============================================
 	// Conversation Management
 	// ============================================
@@ -968,6 +901,7 @@ export class IFlowChatView extends ItemView {
 		const newBtn = selector.createEl('button', {
 			cls: 'iflow-new-conversation-btn',
 			text: '+',
+			attr: { 'aria-label': getButtonAriaLabel('newConversation') },
 		});
 		newBtn.onclick = () => this.createNewConversation();
 
@@ -1069,10 +1003,33 @@ export class IFlowChatView extends ItemView {
 		});
 
 		if (filteredConversations.length === 0) {
-			listContainer.createDiv({
-				cls: 'iflow-conversation-empty',
-				text: searchQuery ? t().ui.noConversationsFound : t().ui.noConversations,
-			});
+			const emptyEl = listContainer.createDiv({ cls: 'iflow-conversation-empty' });
+			if (searchQuery) {
+				// Task 2.7: search no-results state
+				emptyEl.createSpan({ text: t().ui.noConversationsFound });
+				const clearBtn = emptyEl.createEl('button', {
+					cls: 'iflow-conversation-empty-action',
+					text: t().ui.clearSearch,
+				});
+				clearBtn.onclick = () => {
+					const input = listContainer.closest('.iflow-conversation-panel')?.querySelector('input');
+					if (input) {
+						(input as HTMLInputElement).value = '';
+						this.renderConversationList(listContainer, '');
+					}
+				};
+			} else {
+				// Task 2.7: no history state with new-conversation CTA
+				emptyEl.createSpan({ text: t().ui.noConversations });
+				const newBtn = emptyEl.createEl('button', {
+					cls: 'iflow-conversation-empty-action',
+					text: t().ui.startNewConversation,
+				});
+				newBtn.onclick = () => {
+					this.createNewConversation();
+					this.closeConversationPanel();
+				};
+			}
 		}
 	}
 
@@ -1100,6 +1057,7 @@ export class IFlowChatView extends ItemView {
 		const deleteBtn = item.createEl('button', {
 			cls: 'iflow-conversation-item-delete',
 			text: '×',
+			attr: { 'aria-label': getButtonAriaLabel('deleteConversation') },
 		});
 		deleteBtn.onclick = (e) => {
 			e.stopPropagation();
@@ -1205,11 +1163,7 @@ export class IFlowChatView extends ItemView {
 		this.closeConversationPanel();
 
 		// Create new conversation via store - this will trigger onConversationChange
-		this.conversationService.newConversation(
-			this.currentModel as any,
-			this.currentMode as any,
-			this.thinkingEnabled
-		);
+		this.conversationService.newConversation();
 
 		// Note: onConversationChange will handle the UI updates
 	}
@@ -1245,6 +1199,10 @@ export class IFlowChatView extends ItemView {
 	}
 
 	private switchConversation(conversationId: string): void {
+		// Save current scroll position before switching
+		if (this.currentConversationId) {
+			this.scrollPositionStore.save(this.currentConversationId, this.messagesContainer.scrollTop);
+		}
 		this.conversationService.switchConversation(conversationId);
 		// Close panel after switching
 		this.closeConversationPanel();
@@ -1280,23 +1238,22 @@ export class IFlowChatView extends ItemView {
 			this.messages.push({ role: msg.role, content: msg.content, id: msg.id });
 		});
 
-		// Scroll to bottom
-		this.scrollToBottom();
+		// Restore scroll position for this conversation (Task 6.3)
+		const savedPos = this.currentConversationId
+			? this.scrollPositionStore.get(this.currentConversationId)
+			: 0;
+		if (savedPos > 0) {
+			requestAnimationFrame(() => {
+				this.messagesContainer.scrollTop = savedPos;
+			});
+		} else {
+			// Scroll to bottom for new/unsaved conversations
+			this.scrollToBottom();
+		}
 	}
 
 	// ============================================
 	// Update available options from iFlow CLI
 	// ============================================
 
-	updateAvailableModels(models: any[]): void {
-		this.availableModels = models;
-		// Rebuild model selector UI
-		// TODO: Implement UI refresh
-	}
-
-	updateAvailableModes(modes: any[]): void {
-		this.availableModes = modes;
-		// Rebuild mode selector UI
-		// TODO: Implement UI refresh
-	}
 }
