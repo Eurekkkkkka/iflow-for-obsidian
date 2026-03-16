@@ -1,3 +1,19 @@
+## v0.8.3 更新内容
+
+### 🐛 Bug 修复
+
+- **修复 shell 命令执行问题**：在 Obsidian 插件中执行 shell 命令现在可以正常工作
+- 添加 `shellTimeout` 设置，默认 2 分钟超时
+- 增加调试日志，帮助诊断 ACP 协议通信问题
+
+### 🔧 技术改进
+
+- 添加 `clientCapabilities.terminal: true` 声明
+- 添加未处理服务器方法的警告日志
+- 优化 `terminal/*` 方法的 ACP 协议格式
+
+---
+
 ## v0.8.2 更新内容
 
 ### 🐛 Bug 修复

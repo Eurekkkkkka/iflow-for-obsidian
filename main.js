@@ -96,6 +96,7 @@ var JsonRpcProtocol = class {
       if (id !== void 0 && method) {
         const handler = this.serverMethodHandlers.get(method);
         if (!handler) {
+          console.warn(`[iFlow] Unhandled server method: ${method}`, message.params);
           this.sendError(id, -32601, `Method not found: ${method}`);
           return message;
         }
@@ -466,6 +467,10 @@ var IFlowService = class {
     if (!this.protocol) {
       throw new Error("Protocol not initialized");
     }
+    console.log("[iFlow] Sending initialize with clientCapabilities:", JSON.stringify({
+      fs: { readTextFile: true, writeTextFile: true },
+      terminal: true
+    }));
     const initResult = await this.protocol.sendRequest("initialize", {
       protocolVersion: 1,
       clientCapabilities: {
@@ -476,6 +481,7 @@ var IFlowService = class {
         terminal: true
       }
     });
+    console.log("[iFlow] Initialize result:", JSON.stringify(initResult));
     if (!initResult.isAuthenticated) {
       try {
         await this.protocol.sendRequest("authenticate", { methodId: "oauth-iflow" });
@@ -489,6 +495,8 @@ var IFlowService = class {
     const sessionSettings = {
       permission_mode: "default",
       // Required for tools to work
+      shellTimeout: 12e4,
+      // 2 minutes timeout for shell commands
       append_system_prompt: `IMPORTANT: When generating structured content like learning roadmaps, diagrams, knowledge graphs, or similar content:
 1. Use the fs/write_text_file tool to create a file automatically
 2. For visual roadmaps and diagrams, create an Obsidian Canvas file (.canvas extension)

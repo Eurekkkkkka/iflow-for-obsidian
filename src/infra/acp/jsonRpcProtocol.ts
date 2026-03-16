@@ -85,6 +85,7 @@ export class JsonRpcProtocol {
 			if (id !== undefined && method) {
 				const handler = this.serverMethodHandlers.get(method);
 				if (!handler) {
+					console.warn(`[iFlow] Unhandled server method: ${method}`, message.params);
 					this.sendError(id, -32601, `Method not found: ${method}`);
 					return message;
 				}

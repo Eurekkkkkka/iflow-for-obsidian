@@ -109,6 +109,10 @@ export class IFlowService {
 		}
 
 		// Initialize ACP
+		console.log('[iFlow] Sending initialize with clientCapabilities:', JSON.stringify({
+			fs: { readTextFile: true, writeTextFile: true },
+			terminal: true
+		}));
 		const initResult = await this.protocol.sendRequest('initialize', {
 			protocolVersion: 1,
 			clientCapabilities: {
@@ -119,6 +123,7 @@ export class IFlowService {
 				terminal: true,
 			},
 		}) as { isAuthenticated?: boolean };
+		console.log('[iFlow] Initialize result:', JSON.stringify(initResult));
 
 		// Authenticate if needed
 		if (!initResult.isAuthenticated) {
@@ -137,8 +142,11 @@ export class IFlowService {
 
 		// Build session settings similar to VSCode plugin
 		// IMPORTANT: permission_mode is required for tool calling to work
+		// When clientCapabilities.terminal is true, iFlow CLI should use terminal/* methods
+		// shellTimeout: increase timeout for shell commands
 		const sessionSettings: Record<string, unknown> = {
 			permission_mode: 'default', // Required for tools to work
+			shellTimeout: 120000, // 2 minutes timeout for shell commands
 			append_system_prompt: `IMPORTANT: When generating structured content like learning roadmaps, diagrams, knowledge graphs, or similar content:
 1. Use the fs/write_text_file tool to create a file automatically
 2. For visual roadmaps and diagrams, create an Obsidian Canvas file (.canvas extension)
