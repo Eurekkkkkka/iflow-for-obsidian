@@ -1,3 +1,20 @@
+## v0.8.2 更新内容
+
+### 🐛 Bug 修复
+
+- **修复 ACP 协议格式问题**：
+  - `clientCapabilities.terminal` 应为 `boolean: true`，而非对象
+  - `terminal/create` 正确处理 `command` + `args` 参数格式
+  - `terminal/output` 返回 `exitStatus` 对象格式
+  - `terminal/wait_for_exit` 返回符合 ACP 规范的格式
+
+### 🔧 技术改进
+
+- 添加 `maxOutputBytes` 支持，防止输出过大
+- 优化终端输出截断逻辑
+
+---
+
 ## v0.8.1 更新内容
 
 ### 🚀 新功能
